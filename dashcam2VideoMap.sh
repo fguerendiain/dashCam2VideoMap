@@ -1,6 +1,12 @@
 #!/bin/sh
 
-VIDEO2TIMES_PNG_WAV="./video2timedPngWavGPS.sh"
+# Eventualmente la idea es que este otro sh esté "instalado" como parte del paquete
+VIDEO2TIME_PNG="./video2timedPng.sh"
+
+# No termino de entender el tema de los husos horarios en los archivos así que momento los hardcodeo
+VIDEOFILES_TIMEZONE=-3
+GPSDATA_TIMEZONE=-8
+OUTPUT_TIMEZONE=-3
 
 help()
 {
@@ -51,11 +57,14 @@ buildOutputFile()
 
 processVideo()
 {
+    START_TIME_RAW=$(stat -c %W $1)+3600*-1*$VIDEOFILES_TIMEZONE
+    START_TIME=$(($START_TIME_RAW+3600*-$VIDEOFILES_TIMEZONE))
     FILE_NAME=$(basename ${1})
     BASE_NAME=${FILE_NAME%.*}
     OUTPUT_DIR=$TMP_DIR/$2/$BASE_NAME/
     mkdir -p $OUTPUT_DIR
-    $VIDEO2TIMES_PNG_WAV -i $FILE -o $OUTPUT_DIR -t $TIMELAPSE_FACTOR -g $3
+    $VIDEO2TIME_PNG -i $FILE -o $OUTPUT_DIR -t $TIMELAPSE_FACTOR -g $3
+    echo $START_TIME > $OUTPUT_DIR/metadata.txt
 }
 
 INPUT_DIR="./"
@@ -118,7 +127,7 @@ fi
 echo "Starting the show!!"
 
 GPS_FILE=$TMP_DIR/gpsData.txt
-
+mkdir -p $TMP_DIR
 cat $INPUT_DIR/Normal/GPSData*.txt > $GPS_FILE
 
 echo "Processing front camera"
