@@ -19,15 +19,11 @@ help()
     echo "      -t FACTOR Time factor multiplier for timelapse (Must be greater than 0 and less or"
     echo "                equal than 1) (defaults to 1, no timelapse)"
     echo
-    echo "      -g FILE   GPS Data file in the Dashcam format that at least included the data for the"
-    echo "                specified file as input with -i"
-    echo
 }
 
 INPUT_FILE=""
 OUTPUT_DIR=""
 TIMELAPSE_FACTOR=1
-GPS_FILE=""
 
 while getopts "hi:o:t:g:" option; do
     case $option in
@@ -42,9 +38,6 @@ while getopts "hi:o:t:g:" option; do
             ;;
         t)
             TIMELAPSE_FACTOR=$OPTARG
-            ;;
-        g)
-            GPS_FILE=$OPTARG
             ;;
         \?)
             help

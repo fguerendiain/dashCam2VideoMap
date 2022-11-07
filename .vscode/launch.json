@@ -1,0 +1,39 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug",
+            "program": "cargo",
+            "args": [
+                "run",
+                "--",
+                "--frontdir",
+                "/tmp/dashcam2VideoMap/Front/NO20221018-085337-000025F",
+                "--backdir",
+                "/tmp/dashcam2VideoMap/Back/NO20221018-085337-000025B",
+                "--frontoffset",
+                "0",
+                "--backoffset",
+                "0",
+                "-w",
+                "1920",
+                "-o",
+                "/tmp/dashcam2VideoMap/sequence_output/",
+                "--originalfps",
+                "30",
+                "--originaltimefactor",
+                ".055",
+                "--gpsdatafile",
+                "/tmp/dashcam2VideoMap/gpsData.txt",
+                "--mapcachedir",
+                "/home/iguerendiain/Cosas/dashmapCache"
+            ],
+            "cwd": "${workspaceFolder}/dash_to_map"
+        }
+    ]
+}

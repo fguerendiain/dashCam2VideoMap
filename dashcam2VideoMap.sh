@@ -2,8 +2,9 @@
 
 # Eventualmente la idea es que este otro sh esté "instalado" como parte del paquete
 VIDEO2TIME_PNG="./video2timedPng.sh"
+DASH_TO_MAP="./dash_to_map"
 
-# No termino de entender el tema de los husos horarios en los archivos así que momento los hardcodeo
+# No termino de entender el tema de los husos horarios en los archivos así que de momento los hardcodeo
 VIDEOFILES_TIMEZONE=-3
 GPSDATA_TIMEZONE=-8
 OUTPUT_TIMEZONE=-3
@@ -35,6 +36,8 @@ help()
     echo "      -t FACTOR Time factor multiplier for timelapse (Must be greater than 0 and less or"
     echo "                equal than 1) (defaults to 1, no timelapse)"
     echo
+    echo "      -p WIDTH  Width of the output video file (defaults to 1920)"
+    echo
     echo "      -y        Unatended mode"
     echo
 }
@@ -57,14 +60,19 @@ buildOutputFile()
 
 processVideo()
 {
-    START_TIME_RAW=$(stat -c %W $1)+3600*-1*$VIDEOFILES_TIMEZONE
-    START_TIME=$(($START_TIME_RAW+3600*-$VIDEOFILES_TIMEZONE))
     FILE_NAME=$(basename ${1})
     BASE_NAME=${FILE_NAME%.*}
+    YEAR=${BASE_NAME:2:4}
+    MONTH=${BASE_NAME:6:2}
+    DAY=${BASE_NAME:8:2}
+    HOUR=${BASE_NAME:11:2}
+    MINUTE=${BASE_NAME:13:2}
+    SECOND=${BASE_NAME:15:2}
+    EPOCH=$(date -d"$YEAR/$MONTH/$DAY $HOUR:$MINUTE:$SECOND" "+%s")
     OUTPUT_DIR=$TMP_DIR/$2/$BASE_NAME/
     mkdir -p $OUTPUT_DIR
-    $VIDEO2TIME_PNG -i $FILE -o $OUTPUT_DIR -t $TIMELAPSE_FACTOR -g $3
-    echo $START_TIME > $OUTPUT_DIR/metadata.txt
+    $VIDEO2TIME_PNG -i $FILE -o $OUTPUT_DIR -t $TIMELAPSE_FACTOR
+    echo $EPOCH > $OUTPUT_DIR/metadata.txt
 }
 
 INPUT_DIR="./"
@@ -74,6 +82,7 @@ ORIGINAL_SOUND=false
 OUTPUT_FILE="./out.mkv"
 TIMELAPSE_FACTOR=1
 UNATENDED=false
+WIDTH=1920
 
 while getopts "hi:w:a:so:t:y" option; do
     case $option in
@@ -100,6 +109,9 @@ while getopts "hi:w:a:so:t:y" option; do
             ;;
         y)
             UNATENDED=true
+            ;;
+        p)
+            WIDTH=$OPTARG
             ;;
         \?)
             help
@@ -132,16 +144,42 @@ cat $INPUT_DIR/Normal/GPSData*.txt > $GPS_FILE
 
 echo "Processing front camera"
 for FILE in $INPUT_DIR/Normal/Front/* ; do
-    processVideo $FILE "Front" $GPS_FILE
+    processVideo $FILE "Front"
 done
 
 echo "Processing back camera"
 for FILE in $INPUT_DIR/Normal/Back/* ; do
-   processVideo $FILE "Back" $GPS_FILE
+   processVideo $FILE "Back"
 done
 
+SEQ_OUTPUT=$TMP_DIR/sequence_output/
+mkdir -p $SEQ_OUTPUT
+
+FRONT_OFFSET=0
+BACK_OFFSET=0
+for DIR in $TMP_DIR/Front/* ; do
+    FILE_NAME=$(basename $DIR)
+    BASE_NAME=${FILE_NAME%.*}
+    BASE_DIR=${BASE_NAME:0:24}
+    FRONT_NAME=$TMP_DIR/Front/$BASE_DIR"F"
+    BACK_NAME=$TMP_DIR/Back/$BASE_DIR"B"
+
+    echo $DASH_TO_MAP --frontdir $FRONT_NAME --backdir $BACK_NAME --frontoffset $FRONT_OFFSET --backoffset $BACK_OFFSET -w $WIDTH -o $SEQ_OUTPUT
+    
+    FILE_COUNT=$(ls -1q $FRONT_NAME/*.png | wc -l)
+    FRONT_OFFSET=$(($FRONT_OFFSET+$FILE_COUNT))
+    
+    if [ -f $BACK_NAME ]
+    then
+        FILE_COUNT=$(ls -1q $BACK_NAME/*.png | wc -l)
+        BACK_OFFSET=$(($BACK_OFFSET+$FILE_COUNT))
+    fi
+done
 
 # - Por cada directorio generado previamente ejecuta dash2Map con los datos pertinentes y va guardando el resultado en un directorio
+
+
+
 # - Calcula la duración del video
 # - Con eso calcula cuánto audio hay que usar
 # - Calcula la cantidad de cuadros por segundo en base a la cantidad de cuadros por segundo del video original, la cantidad de cuadros por segundo especificados y el multiplicador de tiempo especificado

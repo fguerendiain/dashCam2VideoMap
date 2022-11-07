@@ -6,3 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+clap = { version = "4.0.18", features = ["derive"] }
+curl = "0.4.44"
+png = "0.17.7"
+
+[dependencies.sdl2]
+version = "0.35"
+default-features = false
+features = ["image"]
