@@ -4,20 +4,20 @@ use std::f64::consts::PI;
 use std::fs;
 use std::path::Path;
 use std::ffi::OsStr;
-use std::time;
 use sdl2::video::{Window, WindowContext};
 use sdl2::render::{Canvas, Texture, TextureCreator};
-use sdl2::pixels::Color;
+use sdl2::pixels::{Color,PixelFormatEnum};
 use sdl2::rect::Rect;
 use sdl2::image::LoadTexture;
-use sdl2::pixels::PixelFormatEnum;
 use std::str::Split;
 use curl::easy::Easy;
 use std::fs::File;
-use std::io::Write;
+use sdl2::surface::Surface;
+use std::io::{Write,BufWriter};
+
 
 const ASPECT_RATIO: f32 = 16_f32/9_f32;
-const WINDOW_SCALE: f32 = 0.5;
+const WINDOW_SCALE: f32 = 1_f32;
 const MAP_MARGIN_RIGHT: f32 = 50_f32;
 const MAP_MARGIN_BOTTOM: f32 = 50_f32;
 const BACK_MARGIN_TOP: f32 = 50_f32;
@@ -28,7 +28,7 @@ const TILE_H: i16 = 256;
 const BASE_URL: &str = "https://maps.geoapify.com/v1/";
 const API_KEY: &str = "1e1542ea1d34493a881901530d5f4831";
 const MAP_ZOOM: u16 = 15;
-const GPS_DATA_TIMEZONE: i32 = -3;
+const GPS_DATA_TIMEZONE: i32 = -8;
 
 /// 70mai Dash Cam Lite 2 timelapse and hud map video builder tool
 #[derive(Parser, Debug)]
@@ -43,13 +43,9 @@ struct Args {
     #[arg(long)]
     backdir: String,
 
-    /// Frame offset for the front input image sequence 
+    /// Frame offset for the output image sequence 
     #[arg(long, default_value_t = 0)]
-    frontoffset: u32,
-
-    /// Frame offset for the back input image sequence 
-    #[arg(long, default_value_t = 0)]
-    backoffset: u32,
+    frameoffset: u32,
 
     /// Output width size in pixels
     #[arg(short, long, default_value_t = 1920)]
@@ -73,7 +69,11 @@ struct Args {
 
     /// GPS data file
     #[arg(long)]
-    gpsdatafile: String
+    gpsdatafile: String,
+
+    /// Front camera vertical offset
+    #[arg(long, default_value_t = 0)]
+    frontverticaloffset: i32
 }
 
 struct ImageSizeData {
@@ -98,40 +98,32 @@ fn main() {
 
     let front_dir_path = args.frontdir;
     let back_dir_path = args.backdir;
-    let front_offset = args.frontoffset;
-    let back_offset = args.backoffset;
+    let output_frame_offset = args.frameoffset;
     let output_dir_path = args.outputdir;
     let output_width = args.width;
     let map_cache_dir = args.mapcachedir;
     let original_video_framerate = args.originalfps;
     let original_video_time_factor = args.originaltimefactor;
     let gps_data_file_path = args.gpsdatafile;
+    let front_vertical_offset = args.frontverticaloffset;
 
     let front_images = read_dir(&front_dir_path);
     let back_images = read_dir(&back_dir_path);
     let first_front_image = &front_images[0];
-    let front_image_size = calculate_size(first_front_image, output_width);
-    let back_image_size = calculate_size(first_front_image, output_width);
+    let front_image_size = calculate_size(first_front_image, output_width, ASPECT_RATIO);
+    let back_image_size = calculate_size(&back_images[0], (output_width as f32 * 0.25_f32) as u32, 5_f32/2_f32);
 
     let start_timestamp = extract_timestamp(&front_dir_path);
     let gps_data = extract_gps_data(&gps_data_file_path);
 
-    // for d in &gps_data {
-    //     println!(
-    //         "Time: {}\nPos: {},{}\nLetter: {}\nNumbers: {:?}\n",
-    //         d.timestamp,
-    //         d.latitude,
-    //         d.longitude,
-    //         d.letter,
-    //         d.numbers
-    //     );
-    // }
-
     let mut canvas = init_ui(front_image_size.new_width, front_image_size.cropped_height);
+
+    std::fs::create_dir_all(&output_dir_path).unwrap();
 
     build_animation(
         &mut canvas,
         &front_images,
+        front_vertical_offset,
         &back_images,
         &front_image_size,
         &back_image_size,
@@ -139,12 +131,13 @@ fn main() {
         original_video_framerate,
         original_video_time_factor,
         &gps_data,
-        &map_cache_dir
+        &map_cache_dir,
+        &output_dir_path,
+        output_frame_offset
     );
 }
 
 fn init_ui(image_width: u32, image_height: u32)-> Canvas<Window>{
-    // let frame_time = time::Duration::from_millis(10);
     let sdl = sdl2::init().unwrap();
     let video_subsystem = sdl.video().unwrap();
     let window = video_subsystem
@@ -169,17 +162,17 @@ fn init_ui(image_width: u32, image_height: u32)-> Canvas<Window>{
     canvas
 }
 
-fn calculate_size(input_image: &str, output_width: u32)->ImageSizeData{
-    let first_front_image_size = get_image_size(input_image);
-    let original_image_aspect_ratio = first_front_image_size.0 as f64 / first_front_image_size.1 as f64;
+fn calculate_size(input_image: &str, output_width: u32, aspect_ratio: f32)->ImageSizeData{
+    let image_size = get_image_size(input_image);
+    let original_image_aspect_ratio = image_size.0 as f64 / image_size.1 as f64;
     let new_width = output_width;
     let new_height = (new_width as f64 / original_image_aspect_ratio) as u32;
-    let cropped_height = (new_width as f32 / ASPECT_RATIO) as u32;
-    let original_cropped_height = (first_front_image_size.0 as f32 / ASPECT_RATIO) as u32;
+    let cropped_height = (new_width as f32 / aspect_ratio) as u32;
+    let original_cropped_height = (image_size.0 as f32 / aspect_ratio) as u32;
 
     ImageSizeData{
-        original_width: first_front_image_size.0,
-        original_height: first_front_image_size.1,
+        original_width: image_size.0,
+        original_height: image_size.1,
         original_cropped_height: original_cropped_height,
         new_width: new_width,
         new_height: new_height,
@@ -190,6 +183,7 @@ fn calculate_size(input_image: &str, output_width: u32)->ImageSizeData{
 fn build_animation(
     canvas: &mut Canvas<Window>,
     front_images: &Vec<String>,
+    front_vertical_offset: i32,
     back_images: &Vec<String>,
     front_image_size: &ImageSizeData,
     back_image_size: &ImageSizeData,
@@ -197,12 +191,14 @@ fn build_animation(
     original_video_framerate: u32,
     original_video_time_factor: f32,
     gps_data: &Vec<GPSData>,
-    map_cache_dir: &str
+    map_cache_dir: &str,
+    output_path: &str,
+    output_offset: u32
 ){
 
     let front_src = Rect::new(
         0,
-        0,
+        front_vertical_offset,
         front_image_size.original_width,
         front_image_size.original_cropped_height
     );
@@ -211,7 +207,7 @@ fn build_animation(
         0,
         0,
         front_image_size.new_width,
-        front_image_size.new_height
+        front_image_size.cropped_height
     );
 
     let back_src = Rect::new(
@@ -222,10 +218,10 @@ fn build_animation(
     );
 
     let back_trg = Rect::new(
-        0,
-        0,
+        (front_trg.width() / 2 - back_image_size.new_width / 2) as i32,
+        BACK_MARGIN_TOP as i32,
         back_image_size.new_width,
-        back_image_size.new_height
+        back_image_size.cropped_height
     );
 
     let map_trg = Rect::new(
@@ -237,6 +233,10 @@ fn build_animation(
 
     let fps = original_video_framerate as f32 * original_video_time_factor;
 
+    let mut map_canvas = Surface::new(MAP_WIDTH, MAP_HEIGHT, PixelFormatEnum::ARGB8888)
+        .and_then(|surface| { Surface::into_canvas(surface) })
+        .unwrap();
+
     for idx in 0..front_images.len() {
         render_img(
             canvas,
@@ -247,12 +247,17 @@ fn build_animation(
 
         let delta_timestamp = idx as f32 / fps;
         
-        render_map_frame(
+        build_map_frame(
             start_timestamp + delta_timestamp as u32,
             gps_data,
-            canvas,
-            map_trg,
+            &mut map_canvas,
             map_cache_dir
+        );
+
+        render_canvas(
+            canvas,
+            &mut map_canvas,
+            map_trg
         );
 
         if back_images.len() > idx {
@@ -265,7 +270,46 @@ fn build_animation(
         }
 
         canvas.present();
+
+        let frame_number = output_offset + idx as u32 + 1;
+
+        let frame_path =
+            format!(
+                "{}/{:06}.png",
+                output_path,
+                frame_number
+            );
+
+        write_canvas_to_file(
+            canvas,
+            &frame_path
+        );
     }
+}
+
+fn write_canvas_to_file(
+    canvas: &Canvas<Window>,
+    output_path: &str
+){
+    let (width, height) = canvas.window().size();
+    let output_file = File::create(output_path).unwrap();
+    let ref mut buffer_writer = BufWriter::new(output_file);
+    let mut encoder = png::Encoder::new(buffer_writer, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_trns(vec!(0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8));
+    encoder.set_source_gamma(png::ScaledFloat::from_scaled(45455));
+    encoder.set_source_gamma(png::ScaledFloat::new(1.0 / 2.2));
+    let source_chromaticities = png::SourceChromaticities::new(
+        (0.31270, 0.32900),
+        (0.64000, 0.33000),
+        (0.30000, 0.60000),
+        (0.15000, 0.06000)
+    );
+    encoder.set_source_chromaticities(source_chromaticities);
+    let mut writer = encoder.write_header().unwrap();
+    let canvas_data = canvas.read_pixels(None, PixelFormatEnum::ABGR8888).unwrap();
+    writer.write_image_data(&canvas_data).unwrap();
 }
 
 fn render_img(
@@ -276,18 +320,13 @@ fn render_img(
 ){
     let texture_creator = canvas.texture_creator();
     let texture = load_image_into_texture(&texture_creator, image_path);
-    let _canvas_render_result = canvas.copy(
-        &texture,
-        src,
-        trg
-    );
+    let _canvas_render_result = canvas.copy(&texture, src, trg);
 }
 
 fn solve_gps_line(timestamp: u32, gps_data: &Vec<GPSData>)-> Option<&GPSData>{
     for gps_line in gps_data {
-        let utc_gps = (gps_line.timestamp as i32 + 8 * 3600) as u32;
+        let utc_gps = (gps_line.timestamp as i32 - GPS_DATA_TIMEZONE * 3600) as u32;
         if timestamp <= utc_gps {
-            println!("Timestamp: {} -- GPSUTC: {}",timestamp, utc_gps);
             return Option::Some(gps_line);
         }
     }
@@ -295,11 +334,22 @@ fn solve_gps_line(timestamp: u32, gps_data: &Vec<GPSData>)-> Option<&GPSData>{
     Option::None
 }
 
-fn render_map_frame(
+
+fn render_canvas(
+    canvas_trg: &mut Canvas<Window>,
+    canvas_src: &mut Canvas<Surface>,
+    trg: Rect
+){
+
+    let texture_creator = canvas_trg.texture_creator();
+    let src_texture = texture_creator.create_texture_from_surface(canvas_src.surface()).unwrap();
+    let _ = canvas_trg.copy(&src_texture, None, trg);
+}
+
+fn build_map_frame(
     timestamp: u32,
     gps_data: &Vec<GPSData>,
-    canvas: &mut Canvas<Window>,
-    map_area: Rect,
+    canvas: &mut Canvas<Surface>,
     map_cache_dir: &str
 ){
     match solve_gps_line(timestamp, gps_data){
@@ -342,71 +392,27 @@ fn render_map_frame(
         
             let texture_creator = canvas.texture_creator();
             
+            canvas.set_draw_color(Color::RGB(0, 0, 0));
+            canvas.clear();
+            
             let x_offset = (half_w-px) as i32;
             let y_offset = (half_h-py) as i32;
-            let x_offset_adj = x_offset + (TILE_W * tile_offset_x) as i32;
-            let y_offset_adj = y_offset + (TILE_H * tile_offset_y) as i32;
-
+            let x_offset1 = x_offset + (TILE_W * tile_offset_x) as i32;
+            let y_offset1 = y_offset + (TILE_H * tile_offset_y) as i32;
+            
             let center_tile_texture = texture_creator.load_texture(tile_file).unwrap();
             let adj_tile1_texture = texture_creator.load_texture(adj_tile_file1).unwrap();
             let adj_tile2_texture = texture_creator.load_texture(adj_tile_file2).unwrap();
             let adj_tile3_texture = texture_creator.load_texture(adj_tile_file3).unwrap();
 
-            let center_tile_src_x = if x_offset < 0 { -x_offset } else { 0 };
-            let center_tile_src_y = if y_offset < 0 { -y_offset } else { 0 };
-            let center_tile_uncapped_l = map_area.left() + x_offset;
-            let center_tile_uncapped_t = map_area.top() + y_offset;
-            let center_tile_uncapped_r = center_tile_uncapped_l + TILE_W as i32;
-            let center_tile_uncapped_b = center_tile_uncapped_t + TILE_H as i32;
-            let center_tile_w = map_area.width()  - (if center_tile_uncapped_r > map_area.right() { center_tile_uncapped_r - map_area.right()} else { map_area.left() - center_tile_uncapped_l}) as u32;
-            let center_tile_h = map_area.height() - (if center_tile_uncapped_b > map_area.bottom() { center_tile_uncapped_b - map_area.bottom()} else { map_area.top() - center_tile_uncapped_t}) as u32;
+            let _ = canvas.copy(&center_tile_texture, None, Rect::new(x_offset,y_offset,256,256));
+            let _ = canvas.copy(&adj_tile1_texture, None, Rect::new(x_offset1,y_offset,256,256));
+            let _ = canvas.copy(&adj_tile2_texture, None, Rect::new(x_offset1,y_offset1,256,256));
+            let _ = canvas.copy(&adj_tile3_texture, None, Rect::new(x_offset,y_offset1,256,256));
 
-            let center_tile_src_rect = Rect::new(center_tile_src_x, center_tile_src_y, center_tile_w, center_tile_h);
-
-            let center_tile_trg_rect_x = if x_offset < 0 { map_area.left() } else { map_area.left() + x_offset };
-            let center_tile_trg_rect_y = if y_offset < 0 { map_area.top() } else { map_area.top() + y_offset };
-
-            let center_tile_trg_rect = Rect::new(
-                center_tile_trg_rect_x,
-                center_tile_trg_rect_y,
-                center_tile_w,
-                center_tile_h
-            );
-
-            let adj_tile1_src_rect = Rect::new(0,0,0,0);
-            let adj_tile1_trg_rect = Rect::new(0,0,0,0);
-            let adj_tile2_src_rect = Rect::new(0,0,0,0);
-            let adj_tile2_trg_rect = Rect::new(0,0,0,0);
-            let adj_tile3_src_rect = Rect::new(0,0,0,0);
-            let adj_tile3_trg_rect = Rect::new(0,0,0,0);
-            let indicator_rect = Rect::new(
-                map_area.left() + MAP_WIDTH as i32 / 2 - 5,
-                map_area.top() + MAP_HEIGHT as i32 / 2 - 5,
-                10,
-                10
-            );
-
-            let _ = canvas.copy(&center_tile_texture, center_tile_src_rect, center_tile_trg_rect);
-            // let _ = canvas.copy(&adj_tile1_texture, adj_tile1_src_rect, adj_tile1_trg_rect);
-            // let _ = canvas.copy(&adj_tile2_texture, adj_tile2_src_rect, adj_tile2_trg_rect);
-            // let _ = canvas.copy(&adj_tile3_texture, adj_tile3_src_rect, adj_tile3_trg_rect);
             canvas.set_draw_color(Color::RGB(255, 0, 0));
-            let _ = canvas.fill_rect(indicator_rect);
-
-
-
-
-            // let _canvas_render_result1 = 
-        
-        
-            // let _canvas_render_result2 = canvas.copy(&texture1, None, Rect::new(x_offset1,y_offset,256,256));
-        
-            // let _canvas_render_result3 = canvas.copy(&texture2, None, Rect::new(x_offset1,y_offset1,256,256));
-        
-            // let _canvas_render_result4 = canvas.copy(&texture3, None, Rect::new(x_offset,y_offset1,256,256));
-        
-            // canvas.set_draw_color(Color::RGB(255, 0, 0));
-            // let _canvas_render_result5 = canvas.fill_rect(Rect::new((half_w-2) as i32, (half_h-2) as i32, 4,4));
+            let _ = canvas.fill_rect(Rect::new((half_w-2) as i32, (half_h-2) as i32, 4,4));
+            canvas.present();
         }
         None => {}
     }
@@ -437,7 +443,6 @@ fn extract_timestamp(dir: &str)->u32{
         .expect("Could not parse data from metadata.txt file")
 }
 
-//1666068470,A,-38.115060,-57.597886,0,0,2,84,47,0,0,0,0
 fn extract_gps_data(gps_data_file_path: &str)->Vec<GPSData>{
     let content = fs::read_to_string(gps_data_file_path).expect("Could not read GPS data file");
     let lines: Split<&str> = content.split("\n");
@@ -529,7 +534,7 @@ fn solve_tile(zoom: u16, lat: f64, lon: f64) -> [u16; 4] {
 }
 
 fn download_or_get(cache_dir: &str, zoom: u16, tile_x: i16, tile_y: i16)-> String{
-    let tile_file_path = format!("{}/{}/{}/{}.png", cache_dir, zoom, tile_x, tile_y);
+    let tile_file_path = format!("{}/{}/{}/{}.webp", cache_dir, zoom, tile_x, tile_y);
     let tile_path = Path::new(&tile_file_path);
     let tile_file_path_string = String::from(&tile_file_path);
 
@@ -544,8 +549,8 @@ fn download_or_get(cache_dir: &str, zoom: u16, tile_x: i16, tile_y: i16)-> Strin
         
         let mut curl = Easy::new();
         curl.url(&tile_url).unwrap();
+        let mut tile_file = File::create(&tile_file_path_string).expect("Unable to create tile cache file");
         curl.write_function(move |data| {
-            let mut tile_file = File::create(&tile_file_path_string).expect("Unable to create tile cache file");
             tile_file.write_all(data).unwrap();
             Ok(data.len())
         }).unwrap();

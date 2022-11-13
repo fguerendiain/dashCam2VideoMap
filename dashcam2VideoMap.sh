@@ -40,6 +40,7 @@ help()
     echo
     echo "      -y        Unatended mode"
     echo
+    echo "      -m DIR    Map cahce dir (defaults to ~/.cache/dashmap"
 }
 
 buildOutputFile()
@@ -71,7 +72,7 @@ processVideo()
     EPOCH=$(date -d"$YEAR/$MONTH/$DAY $HOUR:$MINUTE:$SECOND" "+%s")
     OUTPUT_DIR=$TMP_DIR/$2/$BASE_NAME/
     mkdir -p $OUTPUT_DIR
-    $VIDEO2TIME_PNG -i $FILE -o $OUTPUT_DIR -t $TIMELAPSE_FACTOR
+    $VIDEO2TIME_PNG -i $FILE -o $OUTPUT_DIR -t $3
     echo $EPOCH > $OUTPUT_DIR/metadata.txt
 }
 
@@ -83,8 +84,9 @@ OUTPUT_FILE="./out.mkv"
 TIMELAPSE_FACTOR=1
 UNATENDED=false
 WIDTH=1920
+DASHMAP_CACHE="~/.cache/dashmap"
 
-while getopts "hi:w:a:so:t:y" option; do
+while getopts "hi:w:a:so:t:yp:" option; do
     case $option in
         h)
             help
@@ -113,6 +115,9 @@ while getopts "hi:w:a:so:t:y" option; do
         p)
             WIDTH=$OPTARG
             ;;
+        m)
+            DASHMAP_CACHE=$OPTARG
+            ;;
         \?)
             help
             exit;;
@@ -140,16 +145,17 @@ echo "Starting the show!!"
 
 GPS_FILE=$TMP_DIR/gpsData.txt
 mkdir -p $TMP_DIR
-cat $INPUT_DIR/Normal/GPSData*.txt > $GPS_FILE
+cat $INPUT_DIR/GPSData*.txt > $GPS_FILE
 
 echo "Processing front camera"
 for FILE in $INPUT_DIR/Normal/Front/* ; do
-    processVideo $FILE "Front"
+    processVideo $FILE "Front" $TIMELAPSE_FACTOR
 done
 
 echo "Processing back camera"
+BACK_TIMELAPSE_FACTOR=$(echo "$TIMELAPSE_FACTOR*1.2"|bc)
 for FILE in $INPUT_DIR/Normal/Back/* ; do
-   processVideo $FILE "Back"
+  processVideo $FILE "Back" $BACK_TIMELAPSE_FACTOR
 done
 
 SEQ_OUTPUT=$TMP_DIR/sequence_output/
@@ -164,7 +170,7 @@ for DIR in $TMP_DIR/Front/* ; do
     FRONT_NAME=$TMP_DIR/Front/$BASE_DIR"F"
     BACK_NAME=$TMP_DIR/Back/$BASE_DIR"B"
 
-    echo $DASH_TO_MAP --frontdir $FRONT_NAME --backdir $BACK_NAME --frontoffset $FRONT_OFFSET --backoffset $BACK_OFFSET -w $WIDTH -o $SEQ_OUTPUT
+    echo $DASH_TO_MAP --frontdir $FRONT_NAME --backdir $BACK_NAME --frameoffset $FRONT_OFFSET --width $WIDTH --outputdir $SEQ_OUTPUT --mapcachedir $DASHMAP_CACHE --originalfps 30 --originaltimefactor $TIMELAPSE_FACTOR --gpsdatafile $GPS_FILE --frontverticaloffset 200
     
     FILE_COUNT=$(ls -1q $FRONT_NAME/*.png | wc -l)
     FRONT_OFFSET=$(($FRONT_OFFSET+$FILE_COUNT))
@@ -175,17 +181,3 @@ for DIR in $TMP_DIR/Front/* ; do
         BACK_OFFSET=$(($BACK_OFFSET+$FILE_COUNT))
     fi
 done
-
-# - Por cada directorio generado previamente ejecuta dash2Map con los datos pertinentes y va guardando el resultado en un directorio
-
-
-
-# - Calcula la duración del video
-# - Con eso calcula cuánto audio hay que usar
-# - Calcula la cantidad de cuadros por segundo en base a la cantidad de cuadros por segundo del video original, la cantidad de cuadros por segundo especificados y el multiplicador de tiempo especificado
-# - Llama a pngWavs2video.sh con los valores correspondientes
-# - Borra todo lo que hay en el directorio de trabajo (salvo que por parámetro se aclare que no)
-
-
-
-
