@@ -4,7 +4,7 @@ use std::f64::consts::PI;
 use std::fs;
 use std::path::Path;
 use std::ffi::OsStr;
-use sdl2::video::{Window, WindowContext};
+use sdl2::video::Window;
 use sdl2::render::{Canvas, Texture, TextureCreator};
 use sdl2::pixels::{Color,PixelFormatEnum};
 use sdl2::rect::Rect;
@@ -12,12 +12,14 @@ use sdl2::image::LoadTexture;
 use std::str::Split;
 use curl::easy::Easy;
 use std::fs::File;
-use sdl2::surface::Surface;
-use std::io::{Write,BufWriter};
-
+use sdl2::surface::{Surface,SurfaceContext};
+use std::io::Write;
+use std::time::Duration;
+use std::thread;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const ASPECT_RATIO: f32 = 16_f32/9_f32;
-const WINDOW_SCALE: f32 = 1_f32;
+const WINDOW_SCALE: f32 = 0.25_f32;
 const MAP_MARGIN_RIGHT: f32 = 50_f32;
 const MAP_MARGIN_BOTTOM: f32 = 50_f32;
 const BACK_MARGIN_TOP: f32 = 50_f32;
@@ -26,9 +28,10 @@ const MAP_HEIGHT: u32 = 256_u32;
 const TILE_W: i16 = 256;
 const TILE_H: i16 = 256;
 const BASE_URL: &str = "https://maps.geoapify.com/v1/";
-const API_KEY: &str = "1e1542ea1d34493a881901530d5f4831";
 const MAP_ZOOM: u16 = 15;
 const GPS_DATA_TIMEZONE: i32 = -8;
+
+static ALL_FRAMES_DUMPED: AtomicBool = AtomicBool::new(false);
 
 /// 70mai Dash Cam Lite 2 timelapse and hud map video builder tool
 #[derive(Parser, Debug)]
@@ -73,7 +76,10 @@ struct Args {
 
     /// Front camera vertical offset
     #[arg(long, default_value_t = 0)]
-    frontverticaloffset: i32
+    frontverticaloffset: i32,
+
+    #[arg(long)]
+    geoapifykey: String
 }
 
 struct ImageSizeData {
@@ -106,6 +112,7 @@ fn main() {
     let original_video_time_factor = args.originaltimefactor;
     let gps_data_file_path = args.gpsdatafile;
     let front_vertical_offset = args.frontverticaloffset;
+    let geoapifykey = args.geoapifykey;
 
     let front_images = read_dir(&front_dir_path);
     let back_images = read_dir(&back_dir_path);
@@ -116,9 +123,15 @@ fn main() {
     let start_timestamp = extract_timestamp(&front_dir_path);
     let gps_data = extract_gps_data(&gps_data_file_path);
 
-    let mut canvas = init_ui(front_image_size.new_width, front_image_size.cropped_height);
+//    let mut canvas = init_ui(front_image_size.new_width, front_image_size.cropped_height);
+    let mut canvas = init_canvas(front_image_size.new_width, front_image_size.cropped_height);
 
     std::fs::create_dir_all(&output_dir_path).unwrap();
+
+    let mut window_canvas = init_ui(
+        front_image_size.new_width,
+        front_image_size.cropped_height
+    );
 
     build_animation(
         &mut canvas,
@@ -133,8 +146,16 @@ fn main() {
         &gps_data,
         &map_cache_dir,
         &output_dir_path,
-        output_frame_offset
+        output_frame_offset,
+        &mut window_canvas,
+        &geoapifykey
     );
+}
+
+fn init_canvas<'a>(image_width: u32, image_height: u32)-> Canvas<Surface<'a>>{
+    let surface = Surface::new(image_width, image_height, PixelFormatEnum::ARGB8888).unwrap();
+    let canvas = Surface::into_canvas(surface).unwrap();
+    return canvas;
 }
 
 fn init_ui(image_width: u32, image_height: u32)-> Canvas<Window>{
@@ -181,7 +202,7 @@ fn calculate_size(input_image: &str, output_width: u32, aspect_ratio: f32)->Imag
 }
 
 fn build_animation(
-    canvas: &mut Canvas<Window>,
+    canvas: &mut Canvas<Surface>,
     front_images: &Vec<String>,
     front_vertical_offset: i32,
     back_images: &Vec<String>,
@@ -193,7 +214,9 @@ fn build_animation(
     gps_data: &Vec<GPSData>,
     map_cache_dir: &str,
     output_path: &str,
-    output_offset: u32
+    output_offset: u32,
+    window_canvas: &mut Canvas<Window>,
+    geoapifykey: &str
 ){
 
     let front_src = Rect::new(
@@ -231,6 +254,13 @@ fn build_animation(
         MAP_HEIGHT
     );
 
+    let window_canvas_trg = Rect::new(
+        0,
+        0,
+        front_image_size.new_width,
+        front_image_size.cropped_height
+    );
+
     let fps = original_video_framerate as f32 * original_video_time_factor;
 
     let mut map_canvas = Surface::new(MAP_WIDTH, MAP_HEIGHT, PixelFormatEnum::ARGB8888)
@@ -248,6 +278,7 @@ fn build_animation(
         let delta_timestamp = idx as f32 / fps;
         
         build_map_frame(
+            geoapifykey,
             start_timestamp + delta_timestamp as u32,
             gps_data,
             &mut map_canvas,
@@ -269,51 +300,59 @@ fn build_animation(
             );
         }
 
-        canvas.present();
+        println!("Frame {} done", idx+1);
+
+        // canvas.present();
 
         let frame_number = output_offset + idx as u32 + 1;
 
         let frame_path =
             format!(
-                "{}/{:06}.png",
+                "{}/{:06}.jpg",
                 output_path,
                 frame_number
             );
 
+
         write_canvas_to_file(
             canvas,
-            &frame_path
+            &frame_path,
+            idx == front_images.len()-1
         );
+
+        present_canvas_to_window(
+            window_canvas,
+            canvas,
+            window_canvas_trg
+        )
+    }
+
+    println!("Waiting for remaining frames to be dumped into files");
+    while ALL_FRAMES_DUMPED.load(Ordering::SeqCst) == false{
+        thread::sleep(Duration::from_millis(1)); 
     }
 }
 
 fn write_canvas_to_file(
-    canvas: &Canvas<Window>,
-    output_path: &str
+    canvas: &Canvas<Surface>,
+    output_path: &str,
+    is_last_frame: bool
 ){
-    let (width, height) = canvas.window().size();
-    let output_file = File::create(output_path).unwrap();
-    let ref mut buffer_writer = BufWriter::new(output_file);
-    let mut encoder = png::Encoder::new(buffer_writer, width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.set_trns(vec!(0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8));
-    encoder.set_source_gamma(png::ScaledFloat::from_scaled(45455));
-    encoder.set_source_gamma(png::ScaledFloat::new(1.0 / 2.2));
-    let source_chromaticities = png::SourceChromaticities::new(
-        (0.31270, 0.32900),
-        (0.64000, 0.33000),
-        (0.30000, 0.60000),
-        (0.15000, 0.06000)
-    );
-    encoder.set_source_chromaticities(source_chromaticities);
-    let mut writer = encoder.write_header().unwrap();
-    let canvas_data = canvas.read_pixels(None, PixelFormatEnum::ABGR8888).unwrap();
-    writer.write_image_data(&canvas_data).unwrap();
+    let (width, height) = canvas.surface().size();
+    let canvas_pixels = canvas.read_pixels(None, PixelFormatEnum::ABGR8888).unwrap();
+
+    let path = String::from(output_path);
+    thread::spawn(move || {
+        image::save_buffer(&path, &canvas_pixels, width, height, image::ColorType::Rgba8).unwrap();
+        println!("Written frame {}", path);
+        if is_last_frame{
+            ALL_FRAMES_DUMPED.store(true, Ordering::SeqCst);
+        }
+    });
 }
 
 fn render_img(
-    canvas: &mut Canvas<Window>,
+    canvas: &mut Canvas<Surface>,
     image_path: &str,
     src: Rect,
     trg: Rect
@@ -334,9 +373,20 @@ fn solve_gps_line(timestamp: u32, gps_data: &Vec<GPSData>)-> Option<&GPSData>{
     Option::None
 }
 
+fn present_canvas_to_window(
+    canvas_trg: &mut Canvas<Window>,
+    canvas_src: &mut Canvas<Surface>,
+    trg: Rect
+){
+
+    let texture_creator = canvas_trg.texture_creator();
+    let src_texture = texture_creator.create_texture_from_surface(canvas_src.surface()).unwrap();
+    let _ = canvas_trg.copy(&src_texture, None, trg);
+    canvas_trg.present();
+}
 
 fn render_canvas(
-    canvas_trg: &mut Canvas<Window>,
+    canvas_trg: &mut Canvas<Surface>,
     canvas_src: &mut Canvas<Surface>,
     trg: Rect
 ){
@@ -347,6 +397,7 @@ fn render_canvas(
 }
 
 fn build_map_frame(
+    geoapifykey: &str,
     timestamp: u32,
     gps_data: &Vec<GPSData>,
     canvas: &mut Canvas<Surface>,
@@ -385,10 +436,10 @@ fn build_map_frame(
             let adj_tile3_x = tile_x;
             let adj_tile3_y = tile_y + tile_offset_y;
         
-            let tile_file = download_or_get(map_cache_dir, MAP_ZOOM, tile_x, tile_y);
-            let adj_tile_file1 = download_or_get(map_cache_dir, MAP_ZOOM, adj_tile1_x, adj_tile1_y);
-            let adj_tile_file2 = download_or_get(map_cache_dir, MAP_ZOOM, adj_tile2_x, adj_tile2_y);
-            let adj_tile_file3 = download_or_get(map_cache_dir, MAP_ZOOM, adj_tile3_x, adj_tile3_y);
+            let tile_file = download_or_get(geoapifykey, map_cache_dir, MAP_ZOOM, tile_x, tile_y);
+            let adj_tile_file1 = download_or_get(geoapifykey, map_cache_dir, MAP_ZOOM, adj_tile1_x, adj_tile1_y);
+            let adj_tile_file2 = download_or_get(geoapifykey, map_cache_dir, MAP_ZOOM, adj_tile2_x, adj_tile2_y);
+            let adj_tile_file3 = download_or_get(geoapifykey, map_cache_dir, MAP_ZOOM, adj_tile3_x, adj_tile3_y);
         
             let texture_creator = canvas.texture_creator();
             
@@ -418,7 +469,7 @@ fn build_map_frame(
     }
 }
 
-fn load_image_into_texture<'a>(texture_creator: &'a TextureCreator<WindowContext>, img_path: &str)-> Texture<'a>{
+fn load_image_into_texture<'a>(texture_creator: &'a TextureCreator<SurfaceContext>, img_path: &str)-> Texture<'a>{
     let texture = texture_creator.load_texture(img_path).unwrap();
     texture
 }
@@ -533,7 +584,7 @@ fn solve_tile(zoom: u16, lat: f64, lon: f64) -> [u16; 4] {
     return tile;
 }
 
-fn download_or_get(cache_dir: &str, zoom: u16, tile_x: i16, tile_y: i16)-> String{
+fn download_or_get(geoapifykey: &str, cache_dir: &str, zoom: u16, tile_x: i16, tile_y: i16)-> String{
     let tile_file_path = format!("{}/{}/{}/{}.webp", cache_dir, zoom, tile_x, tile_y);
     let tile_path = Path::new(&tile_file_path);
     let tile_file_path_string = String::from(&tile_file_path);
@@ -541,7 +592,7 @@ fn download_or_get(cache_dir: &str, zoom: u16, tile_x: i16, tile_y: i16)-> Strin
     let file_exists = tile_path.exists();
     
     if !file_exists{
-        let tile_url = format!("{}tile/osm-carto/{}/{}/{}.png?apiKey={}", BASE_URL, zoom, tile_x, tile_y, API_KEY);
+        let tile_url = format!("{}tile/osm-carto/{}/{}/{}.png?apiKey={}", BASE_URL, zoom, tile_x, tile_y, geoapifykey);
         let prefix = tile_path.parent().unwrap();
         std::fs::create_dir_all(prefix).unwrap();
 

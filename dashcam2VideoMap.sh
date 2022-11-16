@@ -41,6 +41,8 @@ help()
     echo "      -y        Unatended mode"
     echo
     echo "      -m DIR    Map cahce dir (defaults to ~/.cache/dashmap"
+    echo
+    echo "      -g APIKEY GeoAPIfy key"
 }
 
 buildOutputFile()
@@ -84,9 +86,10 @@ OUTPUT_FILE="./out.mkv"
 TIMELAPSE_FACTOR=1
 UNATENDED=false
 WIDTH=1920
-DASHMAP_CACHE="~/.cache/dashmap"
+DASHMAP_CACHE="${HOME}/.cache/dashmap"
+GEOAPIFY_KEY=""
 
-while getopts "hi:w:a:so:t:yp:" option; do
+while getopts "hi:w:a:so:t:yp:g:" option; do
     case $option in
         h)
             help
@@ -117,6 +120,9 @@ while getopts "hi:w:a:so:t:yp:" option; do
             ;;
         m)
             DASHMAP_CACHE=$OPTARG
+            ;;
+        g)
+            GEOAPIFY_KEY=$OPTARG
             ;;
         \?)
             help
@@ -170,7 +176,7 @@ for DIR in $TMP_DIR/Front/* ; do
     FRONT_NAME=$TMP_DIR/Front/$BASE_DIR"F"
     BACK_NAME=$TMP_DIR/Back/$BASE_DIR"B"
 
-    echo $DASH_TO_MAP --frontdir $FRONT_NAME --backdir $BACK_NAME --frameoffset $FRONT_OFFSET --width $WIDTH --outputdir $SEQ_OUTPUT --mapcachedir $DASHMAP_CACHE --originalfps 30 --originaltimefactor $TIMELAPSE_FACTOR --gpsdatafile $GPS_FILE --frontverticaloffset 200
+    $DASH_TO_MAP --frontdir $FRONT_NAME --backdir $BACK_NAME --frameoffset $FRONT_OFFSET --width $WIDTH --outputdir $SEQ_OUTPUT --mapcachedir $DASHMAP_CACHE --originalfps 30 --originaltimefactor $TIMELAPSE_FACTOR --gpsdatafile $GPS_FILE --frontverticaloffset 200 --geoapifykey $GEOAPIFY_KEY
     
     FILE_COUNT=$(ls -1q $FRONT_NAME/*.png | wc -l)
     FRONT_OFFSET=$(($FRONT_OFFSET+$FILE_COUNT))
