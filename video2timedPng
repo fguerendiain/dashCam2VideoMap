@@ -4,7 +4,7 @@ help()
 {
     echo
     echo "70mai Dash Cam Lite 2 timelapse and hud map video builder tool"
-    echo "--- Video to timed PNG sequence, WAV audio and GPS coordinates"
+    echo "--- Video to timelapsed image sequence"
     echo
     echo "Syntax: $0 [option] [param] [option] [param] ..."
     echo
@@ -19,13 +19,16 @@ help()
     echo "      -t FACTOR Time factor multiplier for timelapse (Must be greater than 0 and less or"
     echo "                equal than 1) (defaults to 1, no timelapse)"
     echo
+    echo "      -w WIDTH  Image width (defaults to same as FILE)"
+    echo
 }
 
 INPUT_FILE=""
 OUTPUT_DIR=""
 TIMELAPSE_FACTOR=1
+WIDTH=-1
 
-while getopts "hi:o:t:g:" option; do
+while getopts "hi:o:t:g:w:" option; do
     case $option in
         h)
             help
@@ -38,6 +41,9 @@ while getopts "hi:o:t:g:" option; do
             ;;
         t)
             TIMELAPSE_FACTOR=$OPTARG
+            ;;
+        w)
+            WIDTH=$OPTARG
             ;;
         \?)
             help
@@ -55,4 +61,9 @@ if [ "$OUTPUT_DIR" = "" ]; then
     exit
 fi
 
-ffmpeg -i $INPUT_FILE -vf "setpts=$TIMELAPSE_FACTOR*PTS" $OUTPUT_DIR/%06d.png
+SCALEARGS=""
+if [ "$WIDTH" -ne "-1" ]; then
+    SCALEARGS=",scale=$WIDTH:-1"
+fi
+
+ffmpeg -i $INPUT_FILE -vf "setpts=$TIMELAPSE_FACTOR*PTS$SCALEARGS" $OUTPUT_DIR/%06d.jpg

@@ -17,6 +17,9 @@ use std::io::Write;
 use std::time::Duration;
 use std::thread;
 use std::sync::atomic::{AtomicBool, Ordering};
+use jpeg_decoder::Decoder;
+use std::io::BufReader;
+
 
 const ASPECT_RATIO: f32 = 16_f32/9_f32;
 const WINDOW_SCALE: f32 = 0.25_f32;
@@ -117,8 +120,8 @@ fn main() {
     let front_images = read_dir(&front_dir_path);
     let back_images = read_dir(&back_dir_path);
     let first_front_image = &front_images[0];
-    let front_image_size = calculate_size(first_front_image, output_width, ASPECT_RATIO);
-    let back_image_size = calculate_size(&back_images[0], (output_width as f32 * 0.25_f32) as u32, 5_f32/2_f32);
+    let front_image_size = calculate_size_jpg(first_front_image, output_width, ASPECT_RATIO);
+    let back_image_size = calculate_size_jpg(&back_images[0], (output_width as f32 * 0.25_f32) as u32, 5_f32/2_f32);
 
     let start_timestamp = extract_timestamp(&front_dir_path);
     let gps_data = extract_gps_data(&gps_data_file_path);
@@ -183,8 +186,8 @@ fn init_ui(image_width: u32, image_height: u32)-> Canvas<Window>{
     canvas
 }
 
-fn calculate_size(input_image: &str, output_width: u32, aspect_ratio: f32)->ImageSizeData{
-    let image_size = get_image_size(input_image);
+fn calculate_size_png(input_image: &str, output_width: u32, aspect_ratio: f32)->ImageSizeData{
+    let image_size = get_image_size_png(input_image);
     let original_image_aspect_ratio = image_size.0 as f64 / image_size.1 as f64;
     let new_width = output_width;
     let new_height = (new_width as f64 / original_image_aspect_ratio) as u32;
@@ -194,6 +197,24 @@ fn calculate_size(input_image: &str, output_width: u32, aspect_ratio: f32)->Imag
     ImageSizeData{
         original_width: image_size.0,
         original_height: image_size.1,
+        original_cropped_height: original_cropped_height,
+        new_width: new_width,
+        new_height: new_height,
+        cropped_height: cropped_height
+    }
+}
+
+fn calculate_size_jpg(input_image: &str, output_width: u32, aspect_ratio: f32)->ImageSizeData{
+    let image_size = get_image_size_jpg(input_image);
+    let original_image_aspect_ratio = image_size.0 as f64 / image_size.1 as f64;
+    let new_width = output_width;
+    let new_height = (new_width as f64 / original_image_aspect_ratio) as u32;
+    let cropped_height = (new_width as f32 / aspect_ratio) as u32;
+    let original_cropped_height = (image_size.0 as f32 / aspect_ratio) as u32;
+
+    ImageSizeData{
+        original_width: image_size.0 as u32,
+        original_height: image_size.1 as u32,
         original_cropped_height: original_cropped_height,
         new_width: new_width,
         new_height: new_height,
@@ -474,12 +495,22 @@ fn load_image_into_texture<'a>(texture_creator: &'a TextureCreator<SurfaceContex
     texture
 }
 
-fn get_image_size(img_path: &str)->(u32,u32){
+fn get_image_size_png(img_path: &str)->(u32,u32){
     let decoder = png::Decoder::new(fs::File::open(img_path).unwrap());
     let info_reader = decoder.read_info().unwrap();
     let info = info_reader.info();
     let width = info.width;
     let height = info.height;
+    (width, height)
+}
+
+fn get_image_size_jpg(img_path: &str)->(u16,u16){
+    let file = File::open(img_path).expect("failed to open file");
+    let mut decoder = Decoder::new(BufReader::new(file));
+    decoder.read_info().expect("failed to read metadata");
+    let metadata = decoder.info().unwrap();
+    let width = metadata.width;
+    let height = metadata.height;
     (width, height)
 }
 
@@ -548,7 +579,7 @@ fn read_dir(dir: &str)->Vec<String>{
                 Some(ext) => {
                     let mut clean_extension = String::from(ext);
                     clean_extension.make_ascii_lowercase();
-                    if clean_extension == "png" {
+                    if clean_extension == "jpg" {
                         match file_path.to_str(){
                             None => println!("Could not read extension"),
                             Some(file_name) => {

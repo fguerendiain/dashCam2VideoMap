@@ -61,6 +61,16 @@ buildOutputFile()
     fi
 }
 
+INPUT_DIR="./"
+TMP_DIR="/tmp/dashcam2VideoMap"
+AUDIO_DIR=""
+OUTPUT_FILE="./out.mkv"
+TIMELAPSE_FACTOR=1
+UNATENDED=false
+WIDTH=1920
+DASHMAP_CACHE="${HOME}/.cache/dashmap"
+GEOAPIFY_KEY=""
+
 processVideo()
 {
     FILE_NAME=$(basename ${1})
@@ -74,19 +84,9 @@ processVideo()
     EPOCH=$(date -d"$YEAR/$MONTH/$DAY $HOUR:$MINUTE:$SECOND" "+%s")
     OUTPUT_DIR=$TMP_DIR/$2/$BASE_NAME/
     mkdir -p $OUTPUT_DIR
-    $VIDEO2TIME_PNG -i $FILE -o $OUTPUT_DIR -t $3
+    $VIDEO2TIME_PNG -i $FILE -o $OUTPUT_DIR -t $3 -w $WIDTH
     echo $EPOCH > $OUTPUT_DIR/metadata.txt
 }
-
-INPUT_DIR="./"
-TMP_DIR="/tmp/dashcam2VideoMap"
-AUDIO_DIR=""
-OUTPUT_FILE="./out.mkv"
-TIMELAPSE_FACTOR=1
-UNATENDED=false
-WIDTH=1920
-DASHMAP_CACHE="${HOME}/.cache/dashmap"
-GEOAPIFY_KEY=""
 
 while getopts "hi:w:a:o:t:yp:g:m:" option; do
     case $option in
@@ -174,7 +174,7 @@ for DIR in $TMP_DIR/Front/* ; do
     $DASH_TO_MAP --frontdir $FRONT_NAME --backdir $BACK_NAME --frameoffset $FRAME_OFFSET --width $WIDTH --outputdir $SEQ_OUTPUT --mapcachedir $DASHMAP_CACHE --originalfps 30 --originaltimefactor $TIMELAPSE_FACTOR --gpsdatafile $GPS_FILE --frontverticaloffset 200 --geoapifykey $GEOAPIFY_KEY
     
     FILE_COUNT=$(ls -1q $FRONT_NAME/* | wc -l)
-    FRAME_OFFSET=$(($FRAME_OFFSET+$FILE_COUNT))
+    FRAME_OFFSET=$(($FRAME_OFFSET+$FILE_COUNT-1))
 done
 
 if [ -n "$AUDIO_DIR" ]; then
