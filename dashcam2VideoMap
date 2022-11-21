@@ -1,8 +1,10 @@
 #!/bin/sh
 
 # Eventualmente la idea es que este otro sh esté "instalado" como parte del paquete
-VIDEO2TIME_PNG="./video2timedPng.sh"
-DASH_TO_MAP="./dash_to_map"
+VIDEO2TIME_PNG="./video2timedPng"
+DASH_TO_MAP="./dash_to_map/target/debug/dash_to_map"
+SOUNDTRACK_BUILDER="./buildSoundtrack"
+FINAL_TRANSCODER="./pngWavs2Video"
 
 # No termino de entender el tema de los husos horarios en los archivos así que de momento los hardcodeo
 VIDEOFILES_TIMEZONE=-3
@@ -28,8 +30,6 @@ help()
     echo "      -a DIR    Audio directory from where to read supported audio files to be used in the"
     echo "                final video (optional, if none, no audio is added)"
     echo
-    echo "      -s        Use original video audio. It's mixed with the audio provided in -a if present"
-    echo
     echo "      -o FILE   Output video file (Extension defines the container, defaults to"
     echo "                mkv) (defaults to out.mkv)"
     echo
@@ -40,7 +40,7 @@ help()
     echo
     echo "      -y        Unatended mode"
     echo
-    echo "      -m DIR    Map cahce dir (defaults to ~/.cache/dashmap"
+    echo "      -m DIR    Map cahce dir (defaults to ~/.cache/dashmap)"
     echo
     echo "      -g APIKEY GeoAPIfy key"
 }
@@ -81,7 +81,6 @@ processVideo()
 INPUT_DIR="./"
 TMP_DIR="/tmp/dashcam2VideoMap"
 AUDIO_DIR=""
-ORIGINAL_SOUND=false
 OUTPUT_FILE="./out.mkv"
 TIMELAPSE_FACTOR=1
 UNATENDED=false
@@ -89,7 +88,7 @@ WIDTH=1920
 DASHMAP_CACHE="${HOME}/.cache/dashmap"
 GEOAPIFY_KEY=""
 
-while getopts "hi:w:a:so:t:yp:g:" option; do
+while getopts "hi:w:a:o:t:yp:g:m:" option; do
     case $option in
         h)
             help
@@ -102,9 +101,6 @@ while getopts "hi:w:a:so:t:yp:g:" option; do
             ;;
         a)
             AUDIO_DIR=$OPTARG
-            ;;
-        s)
-            ORIGINAL_SOUND=true
             ;;
         o)
             buildOutputFile $OPTARG
@@ -134,8 +130,8 @@ echo "Summary"
 echo "~~~~~~~"
 echo "Input:    $INPUT_DIR"
 echo "Tmp:      $TMP_DIR"
+echo "MapCachè: $DASHMAP_CACHE"
 echo "Audio:    $AUDIO_DIR"
-echo "Sound:    $ORIGINAL_SOUND"
 echo "Time:     $TIMELAPSE_FACTOR"
 echo "Output:   $OUTPUT_FILE"
 echo ""
@@ -148,26 +144,25 @@ if [ $UNATENDED = false ]; then
 fi
 
 echo "Starting the show!!"
-
 GPS_FILE=$TMP_DIR/gpsData.txt
 mkdir -p $TMP_DIR
 cat $INPUT_DIR/GPSData*.txt > $GPS_FILE
 
 echo "Processing front camera"
-for FILE in $INPUT_DIR/Normal/Front/* ; do
-    processVideo $FILE "Front" $TIMELAPSE_FACTOR
-done
+#for FILE in $INPUT_DIR/Normal/Front/* ; do
+#    processVideo $FILE "Front" $TIMELAPSE_FACTOR
+#done
 
 echo "Processing back camera"
 BACK_TIMELAPSE_FACTOR=$(echo "$TIMELAPSE_FACTOR*1.2"|bc)
-for FILE in $INPUT_DIR/Normal/Back/* ; do
-  processVideo $FILE "Back" $BACK_TIMELAPSE_FACTOR
-done
+#for FILE in $INPUT_DIR/Normal/Back/* ; do
+#    processVideo $FILE "Back" $BACK_TIMELAPSE_FACTOR
+#done
 
 SEQ_OUTPUT=$TMP_DIR/sequence_output/
 mkdir -p $SEQ_OUTPUT
 
-FRONT_OFFSET=0
+FRAME_OFFSET=0
 BACK_OFFSET=0
 for DIR in $TMP_DIR/Front/* ; do
     FILE_NAME=$(basename $DIR)
@@ -176,14 +171,24 @@ for DIR in $TMP_DIR/Front/* ; do
     FRONT_NAME=$TMP_DIR/Front/$BASE_DIR"F"
     BACK_NAME=$TMP_DIR/Back/$BASE_DIR"B"
 
-    $DASH_TO_MAP --frontdir $FRONT_NAME --backdir $BACK_NAME --frameoffset $FRONT_OFFSET --width $WIDTH --outputdir $SEQ_OUTPUT --mapcachedir $DASHMAP_CACHE --originalfps 30 --originaltimefactor $TIMELAPSE_FACTOR --gpsdatafile $GPS_FILE --frontverticaloffset 200 --geoapifykey $GEOAPIFY_KEY
+#    $DASH_TO_MAP --frontdir $FRONT_NAME --backdir $BACK_NAME --frameoffset $FRAME_OFFSET --width $WIDTH --outputdir $SEQ_OUTPUT --mapcachedir $DASHMAP_CACHE --originalfps 30 --originaltimefactor $TIMELAPSE_FACTOR --gpsdatafile $GPS_FILE --frontverticaloffset 200 --geoapifykey $GEOAPIFY_KEY
     
-    FILE_COUNT=$(ls -1q $FRONT_NAME/*.png | wc -l)
-    FRONT_OFFSET=$(($FRONT_OFFSET+$FILE_COUNT))
-    
-    if [ -f $BACK_NAME ]
-    then
-        FILE_COUNT=$(ls -1q $BACK_NAME/*.png | wc -l)
-        BACK_OFFSET=$(($BACK_OFFSET+$FILE_COUNT))
-    fi
+    FILE_COUNT=$(ls -1q $FRONT_NAME/* | wc -l)
+    FRAME_OFFSET=$(($FRAME_OFFSET+$FILE_COUNT))
 done
+
+if [ -n "$AUDIO_DIR" ]; then
+    VIDEO_DURATION=$(($FILE_COUNT/30))
+    SOUNDTRACK=$TMP_DIR/music.wav
+    echo "Generating soundtrack..."
+    $SOUNDTRACK_BUILDER -i $AUDIO_DIR -l $VIDEO_DURATION -o $SOUNDTRACK
+    echo "Transcoding final video..."
+    echo "$FINAL_TRANSCODER -i $SEQ_OUTPUT -a $SOUNDTRACK -f 1 -x 3 -o $OUTPUT_FILE"
+else
+    echo "Transcoding final video..."
+    echo "$FINAL_TRANSCODER -i $SEQ_OUTPUT -f 1 -x 3 -o $OUTPUT_FILE"
+fi
+
+# rm $TMP_DIR -R
+
+echo "Ding!! -- All done"
