@@ -183,10 +183,10 @@ if [ -n "$AUDIO_DIR" ]; then
     echo "Generating soundtrack..."
     $SOUNDTRACK_BUILDER -i $AUDIO_DIR -l $VIDEO_DURATION -o $SOUNDTRACK
     echo "Transcoding final video..."
-    echo "$FINAL_TRANSCODER -i $SEQ_OUTPUT -a $SOUNDTRACK -f 1 -x 3 -o $OUTPUT_FILE"
+    $FINAL_TRANSCODER -i $SEQ_OUTPUT -a $SOUNDTRACK -f 1 -x 3 -o $OUTPUT_FILE
 else
     echo "Transcoding final video..."
-    echo "$FINAL_TRANSCODER -i $SEQ_OUTPUT -f 1 -x 3 -o $OUTPUT_FILE"
+    $FINAL_TRANSCODER -i $SEQ_OUTPUT -f 1 -x 3 -o $OUTPUT_FILE
 fi
 
 # rm $TMP_DIR -R

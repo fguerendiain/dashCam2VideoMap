@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 help()
 {
@@ -76,28 +76,30 @@ FFMPEGARGSAUDIO=""
 FFMPEGARGSAUDIOSHORTEST=""
 if [ -n "$AUDIO_FILE" ]; then
     FFMPEGARGSAUDIO="-i $AUDIO_FILE"
-    FFMPEGARGSAUDIOSHORT="-shortest"
+    FFMPEGARGSAUDIOSHORTEST="-shortest"
 fi
 
-CMD="ffmpeg \
+# CMD="ffmpeg \
+#     -framerate $FPS \
+#     -i $INPUT_DIR/%06d.jpg \
+#     $FFMPEGARGSAUDIO \
+#     -vf fade=in:0:d=$FADE_IN,fade=out:$FADE_OUT_START:d=$FADE_OUT \
+#     -af afade=in:0:d=$FADE_IN,afade=out:$FADE_OUT_START:d=$FADE_OUT \
+#     -c:v libx265 -preset fast \
+#     -c:a aac -b:a 128k \
+#     $FFMPEGARGSAUDIOSHORTEST \
+#     $OUTPUT_FILE"
+
+echo "S: $FADE_OUT_START"
+echo "D: $FADE_OUT"
+
+ffmpeg \
     -framerate $FPS \
     -i $INPUT_DIR/%06d.jpg \
     $FFMPEGARGSAUDIO \
-    -vf fade=in:0:d=$FADE_IN,fade=out:$FADE_OUT_START:d=$FADE_OUT \
-    -af afade=in:0:d=$FADE_IN,afade=out:$FADE_OUT_START:d=$FADE_OUT \
+    -vf fade=in:0:d=$FADE_IN,fade=t=out:st=$FADE_OUT_START:d=$FADE_OUT \
+    -af afade=in:0:d=$FADE_IN,afade=t=out:st=$FADE_OUT_START:d=$FADE_OUT \
     -c:v libx265 -preset fast \
     -c:a aac -b:a 128k \
     $FFMPEGARGSAUDIOSHORTEST \
-    $OUTPUT_FILE"
-
-CMD="ffmpeg \
-    -framerate $FPS \
-    -i $INPUT_DIR/%06d.jpg \
-    $FFMPEGARGSAUDIO \
-    -c:v libx265 -preset fast \
-    -c:a aac -b:a 128k \
-    $FFMPEGARGSAUDIOSHORTEST \
-    $OUTPUT_FILE"
-
-echo $CMD
-"$CMD"
+    $OUTPUT_FILE
