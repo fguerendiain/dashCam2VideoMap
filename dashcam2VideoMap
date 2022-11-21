@@ -149,15 +149,15 @@ mkdir -p $TMP_DIR
 cat $INPUT_DIR/GPSData*.txt > $GPS_FILE
 
 echo "Processing front camera"
-#for FILE in $INPUT_DIR/Normal/Front/* ; do
-#    processVideo $FILE "Front" $TIMELAPSE_FACTOR
-#done
+for FILE in $INPUT_DIR/Normal/Front/* ; do
+   processVideo $FILE "Front" $TIMELAPSE_FACTOR
+done
 
 echo "Processing back camera"
 BACK_TIMELAPSE_FACTOR=$(echo "$TIMELAPSE_FACTOR*1.2"|bc)
-#for FILE in $INPUT_DIR/Normal/Back/* ; do
-#    processVideo $FILE "Back" $BACK_TIMELAPSE_FACTOR
-#done
+for FILE in $INPUT_DIR/Normal/Back/* ; do
+   processVideo $FILE "Back" $BACK_TIMELAPSE_FACTOR
+done
 
 SEQ_OUTPUT=$TMP_DIR/sequence_output/
 mkdir -p $SEQ_OUTPUT
@@ -171,7 +171,7 @@ for DIR in $TMP_DIR/Front/* ; do
     FRONT_NAME=$TMP_DIR/Front/$BASE_DIR"F"
     BACK_NAME=$TMP_DIR/Back/$BASE_DIR"B"
 
-#    $DASH_TO_MAP --frontdir $FRONT_NAME --backdir $BACK_NAME --frameoffset $FRAME_OFFSET --width $WIDTH --outputdir $SEQ_OUTPUT --mapcachedir $DASHMAP_CACHE --originalfps 30 --originaltimefactor $TIMELAPSE_FACTOR --gpsdatafile $GPS_FILE --frontverticaloffset 200 --geoapifykey $GEOAPIFY_KEY
+    $DASH_TO_MAP --frontdir $FRONT_NAME --backdir $BACK_NAME --frameoffset $FRAME_OFFSET --width $WIDTH --outputdir $SEQ_OUTPUT --mapcachedir $DASHMAP_CACHE --originalfps 30 --originaltimefactor $TIMELAPSE_FACTOR --gpsdatafile $GPS_FILE --frontverticaloffset 200 --geoapifykey $GEOAPIFY_KEY
     
     FILE_COUNT=$(ls -1q $FRONT_NAME/* | wc -l)
     FRAME_OFFSET=$(($FRAME_OFFSET+$FILE_COUNT))
