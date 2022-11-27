@@ -102,4 +102,4 @@ ffmpeg \
     -c:v libx265 -preset fast \
     -c:a aac -b:a 128k \
     $FFMPEGARGSAUDIOSHORTEST \
-    $OUTPUT_FILE
+    $OUTPUT_FILE > /dev/null

@@ -66,4 +66,4 @@ if [ "$WIDTH" -ne "-1" ]; then
     SCALEARGS=",scale=$WIDTH:-1"
 fi
 
-ffmpeg -i $INPUT_FILE -vf "setpts=$TIMELAPSE_FACTOR*PTS$SCALEARGS" $OUTPUT_DIR/%06d.jpg
+ffmpeg -i $INPUT_FILE -vf "setpts=$TIMELAPSE_FACTOR*PTS$SCALEARGS" $OUTPUT_DIR/%06d.jpg > /dev/null

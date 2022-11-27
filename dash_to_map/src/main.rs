@@ -531,13 +531,16 @@ fn extract_gps_data(gps_data_file_path: &str)->Vec<GPSData>{
     let mut gps_data = Vec::new();
 
     for line in lines {
+        println!("{}", line);
         let parts = line.split(",").collect::<Vec<&str>>();
 
         if parts.len() > 1{
             let time = parts[0].parse::<u32>().unwrap();
             let letter = parts[1];
-            let lat = parts[2].parse::<f64>().unwrap();
-            let lon = parts[3].parse::<f64>().unwrap();
+
+            let lat = parts[2].parse::<f64>().unwrap_or(0_f64);
+            let lon = parts[3].parse::<f64>().unwrap_or(0_f64);
+            
             let numbers = [
                 parts[4].parse::<i32>().unwrap(),
                 parts[5].parse::<i32>().unwrap(),

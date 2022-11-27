@@ -84,6 +84,7 @@ processVideo()
     EPOCH=$(date -d"$YEAR/$MONTH/$DAY $HOUR:$MINUTE:$SECOND" "+%s")
     OUTPUT_DIR=$TMP_DIR/$2/$BASE_NAME/
     mkdir -p $OUTPUT_DIR
+    echo "$VIDEO2TIME_PNG -i $FILE -o $OUTPUT_DIR -t $3 -w $WIDTH"
     $VIDEO2TIME_PNG -i $FILE -o $OUTPUT_DIR -t $3 -w $WIDTH
     echo $EPOCH > $OUTPUT_DIR/metadata.txt
 }
@@ -148,22 +149,23 @@ GPS_FILE=$TMP_DIR/gpsData.txt
 mkdir -p $TMP_DIR
 cat $INPUT_DIR/GPSData*.txt > $GPS_FILE
 
-echo "Processing front camera"
+echo "Processing front camera..."
 for FILE in $INPUT_DIR/Normal/Front/* ; do
-   processVideo $FILE "Front" $TIMELAPSE_FACTOR
+    echo $FILE
+    processVideo $FILE "Front" $TIMELAPSE_FACTOR
 done
 
-echo "Processing back camera"
+echo "Processing back camera..."
 BACK_TIMELAPSE_FACTOR=$(echo "$TIMELAPSE_FACTOR*1.2"|bc)
 for FILE in $INPUT_DIR/Normal/Back/* ; do
-   processVideo $FILE "Back" $BACK_TIMELAPSE_FACTOR
+    echo $FILE
+    processVideo $FILE "Back" $BACK_TIMELAPSE_FACTOR
 done
 
 SEQ_OUTPUT=$TMP_DIR/sequence_output/
 mkdir -p $SEQ_OUTPUT
 
 FRAME_OFFSET=0
-BACK_OFFSET=0
 for DIR in $TMP_DIR/Front/* ; do
     FILE_NAME=$(basename $DIR)
     BASE_NAME=${FILE_NAME%.*}
@@ -171,22 +173,27 @@ for DIR in $TMP_DIR/Front/* ; do
     FRONT_NAME=$TMP_DIR/Front/$BASE_DIR"F"
     BACK_NAME=$TMP_DIR/Back/$BASE_DIR"B"
 
-    $DASH_TO_MAP --frontdir $FRONT_NAME --backdir $BACK_NAME --frameoffset $FRAME_OFFSET --width $WIDTH --outputdir $SEQ_OUTPUT --mapcachedir $DASHMAP_CACHE --originalfps 30 --originaltimefactor $TIMELAPSE_FACTOR --gpsdatafile $GPS_FILE --frontverticaloffset 200 --geoapifykey $GEOAPIFY_KEY
+    echo "Building final image sequence..."
+    echo "$DASH_TO_MAP --frontdir $FRONT_NAME --backdir $BACK_NAME --frameoffset $FRAME_OFFSET --width $WIDTH --outputdir $SEQ_OUTPUT --mapcachedir $DASHMAP_CACHE --originalfps 30 --originaltimefactor $TIMELAPSE_FACTOR --gpsdatafile $GPS_FILE --frontverticaloffset 200 --geoapifykey $GEOAPIFY_KEY"
+    $DASH_TO_MAP --frontdir $FRONT_NAME --backdir $BACK_NAME --frameoffset $FRAME_OFFSET --width $WIDTH --outputdir $SEQ_OUTPUT --mapcachedir $DASHMAP_CACHE --originalfps 30 --originaltimefactor $TIMELAPSE_FACTOR --gpsdatafile $GPS_FILE --frontverticaloffset 200 --geoapifykey $GEOAPIFY_KEY > /dev/null
     
     FILE_COUNT=$(ls -1q $FRONT_NAME/* | wc -l)
     FRAME_OFFSET=$(($FRAME_OFFSET+$FILE_COUNT-1))
 done
 
 if [ -n "$AUDIO_DIR" ]; then
-    VIDEO_DURATION=$(($FILE_COUNT/30))
+    VIDEO_DURATION=$(($FRAME_OFFSET/30))
     SOUNDTRACK=$TMP_DIR/music.wav
-    echo "Generating soundtrack..."
-    $SOUNDTRACK_BUILDER -i $AUDIO_DIR -l $VIDEO_DURATION -o $SOUNDTRACK
+    echo "Generating soundtrack... -- $VIDEO_DURATION"
+    echo "$SOUNDTRACK_BUILDER -i $AUDIO_DIR -l $VIDEO_DURATION -o $SOUNDTRACK"
+    $SOUNDTRACK_BUILDER -i $AUDIO_DIR -l $VIDEO_DURATION -o $SOUNDTRACK > /dev/null
     echo "Transcoding final video..."
-    $FINAL_TRANSCODER -i $SEQ_OUTPUT -a $SOUNDTRACK -f 1 -x 3 -o $OUTPUT_FILE
+    echo "$FINAL_TRANSCODER -i $SEQ_OUTPUT -a $SOUNDTRACK -f 1 -x 3 -o $OUTPUT_FILE"
+    $FINAL_TRANSCODER -i $SEQ_OUTPUT -a $SOUNDTRACK -f 1 -x 3 -o $OUTPUT_FILE > /dev/null
 else
     echo "Transcoding final video..."
-    $FINAL_TRANSCODER -i $SEQ_OUTPUT -f 1 -x 3 -o $OUTPUT_FILE
+    echo "$FINAL_TRANSCODER -i $SEQ_OUTPUT -f 1 -x 3 -o $OUTPUT_FILE"
+    $FINAL_TRANSCODER -i $SEQ_OUTPUT -f 1 -x 3 -o $OUTPUT_FILE > /dev/null
 fi
 
 # rm $TMP_DIR -R
