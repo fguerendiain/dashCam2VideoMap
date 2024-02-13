@@ -171,7 +171,7 @@ echo "[ OK ]"
 mkdir -p $TMP_DIR/mapImgSeq
 MAP_BUILD_CMD="$DASH_TO_MAP --frontvideo $INPUT_DIR/Normal/Front --outputdir $TMP_DIR/mapImgSeq --fps 30 --originaltimefactor $TIMELAPSE_FACTOR --gpsdatafile $GPS_FILE --geoapifykey $GEOAPIFY_KEY --mapcachedir $DASHMAP_CACHE"
 
-#$MAP_BUILD_CMD
+$MAP_BUILD_CMD
 
 echo "Calculating total video duration..."
 TOTAL_DURATION=`for FILE in $INPUT_DIR/Normal/Front/*
@@ -232,10 +232,10 @@ fi
 FADE_OUT_START=`echo $TOTAL_DURATION - 1 | bc`
 
 # Fade in/out
-FFMPEG_FILTER="$FFMPEG_FILTER[bothcameraswithmap]fade=d=1,fade=out:$FADE_OUT_START:d=1[finalrender_v];"
+FFMPEG_FILTER="$FFMPEG_FILTER[bothcameraswithmap]fade=in:0:d=1,fade=t=out:st=$FADE_OUT_START:d=1[finalrender_v];"
 
 # Audio Fade in/out
-FFMPEG_FILTER="$FFMPEG_FILTER[$AUDIO_INPUT_NAME]afade=d=1,afade=out:$FADE_OUT_START:d=1[finalrender_a];"
+FFMPEG_FILTER="$FFMPEG_FILTER[$AUDIO_INPUT_NAME]afade=in:0:d=1,afade=t=out:st=$FADE_OUT_START:d=1[finalrender_a];"
 
 # Compression
 FFMPEG_FORMAT="-c:v libx265 -preset slow -c:a aac -b:a 128k"
