@@ -1,7 +1,7 @@
 extern crate sdl2;
 use clap::Parser;
-use sdl2::video::Window;
 use std::f64::consts::PI;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
 use sdl2::render::Canvas;
@@ -10,12 +10,15 @@ use sdl2::rect::Rect;
 use sdl2::image::LoadTexture;
 use std::str::Split;
 use curl::easy::Easy;
-use std::fs::File;
+use std::fs::{DirEntry, File};
 use sdl2::surface::Surface;
 use std::io::Write;
-use std::time::Duration;
-use std::thread;
-use std::sync::atomic::{AtomicBool, Ordering};
+use chrono::{NaiveDate, NaiveDateTime};
+use substring::Substring;
+use std::str;
+use ffprobe;
+use crossterm::{execute,cursor::Hide,cursor::Show};
+use std::io;
 
 const MAP_WIDTH: u32 = 256_u32;
 const MAP_HEIGHT: u32 = 256_u32;
@@ -23,19 +26,23 @@ const TILE_W: i16 = 256;
 const TILE_H: i16 = 256;
 const BASE_URL: &str = "https://maps.geoapify.com/v1/";
 const MAP_ZOOM: u16 = 15;
-
-static ALL_FRAMES_DUMPED: AtomicBool = AtomicBool::new(false);
+const PAD_TOKEN: &str = "PADDING";
+const EMPTY_GPS_NUMBERS: [i32; 9] = [0,0,0,0,0,0,0,0,0];
 
 /// 70mai Dash Cam Lite 2 map image sequence maker
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    /// Dashcam normal front camera dir (for calculating map time offset)
+    #[arg(short, long)]
+    frontvideo: String,
+
     /// Output dir for the rendered image sequence
     #[arg(short, long)]
     outputdir: String,
 
     /// Directory to read and write cache tile map
-    #[arg(short, long, default_value_t = String::from("./dash2MapCache"))]
+    #[arg(short, long, default_value_t = String::from("~./cache/dashmap"))]
     mapcachedir: String,
 
     /// Output expected framerate
@@ -50,8 +57,13 @@ struct Args {
     #[arg(long)]
     gpsdatafile: String,
 
+    // GeoAPIfy key for map images
     #[arg(long)]
-    geoapifykey: String
+    geoapifykey: String,
+
+    // Difference between GPS timestamp and video timestamp in seconds
+    #[arg(long, short, default_value_t = -17987_i64)] // -5 * 3600 + 13
+    timedifference: i64
 }
 
 struct GPSData {
@@ -62,9 +74,20 @@ struct GPSData {
     numbers: [i32;9]
 }
 
+struct VideoData{
+    start_timestamp: u32,
+    end_timestamp: u32,
+    filename: String
+}
+
 fn main() {
+    let _ = execute!(
+        io::stdout(),
+        Hide
+    );
     let args = Args::parse();
 
+    let front_video_path = args.frontvideo;
     let output_dir_path = args.outputdir;
     let map_cache_dir = args.mapcachedir;
     let fps = args.fps;
@@ -72,36 +95,155 @@ fn main() {
     let gps_data_file_path = args.gpsdatafile;
     let geoapifykey = args.geoapifykey;
 
-    let gps_trips = extract_gps_data(&gps_data_file_path);
+    let raw_gps_data = extract_gps_data(&gps_data_file_path);
+    let video_timestamps = extract_timestamps(&front_video_path, args.timedifference);
 
     let mut canvas = init_canvas(MAP_WIDTH, MAP_HEIGHT);
 
-    let mut window_canvas = init_ui(
-        MAP_WIDTH,
-        MAP_HEIGHT
+    build_animation(
+        &video_timestamps,
+        &raw_gps_data,
+        time_multiplication,
+        fps,
+        &geoapifykey,
+        &mut canvas,
+        &map_cache_dir,
+        &output_dir_path
     );
 
-    let last_trip_index = gps_trips.len()-1;
-    for (index, gps_data) in gps_trips.into_iter().enumerate() {
-        let trip_outpur_dir = format!("{}/{}", output_dir_path, gps_data.first().unwrap().timestamp);
-        std::fs::create_dir_all(&trip_outpur_dir).unwrap();
-        build_animation(
-            &mut canvas,
-            time_multiplication,
-            &gps_data,
-            fps,
-            &geoapifykey,
-            &map_cache_dir,
-            &trip_outpur_dir,
-            index == last_trip_index,
-            &mut window_canvas
-        );    
+    let _ = execute!(
+        io::stdout(),
+        Show
+    );
+}
+
+fn extract_timestamps(front_video_path: &String, timezonedifference: i64) -> Vec<VideoData>{
+    println!("Extracting timestamps and duration from front videos...");
+    let mut raw_timestamp_posts: Vec<VideoData> = Vec::new();
+    let path_dir = Path::new(front_video_path);
+    
+    if path_dir.is_dir(){
+        let dir_iterator = fs::read_dir(path_dir).unwrap();
+        let mut files: Vec<DirEntry> = Vec::new();
+
+        for path in dir_iterator {
+            files.push(path.unwrap());
+        }
+
+        files.sort_by(|a, b| a.path().cmp(&b.path()));
+
+        for file in files {
+            let file_path = file.path();
+
+            match file_path.extension().and_then(OsStr::to_str) {
+                None => println!("Could not read extenstion on file from front camera directory"),
+                Some(ext) => {
+                    let mut clean_extension = String::from(ext);
+                    clean_extension.make_ascii_lowercase();
+                    if clean_extension == "mp4" {
+                        match file_path.to_str(){
+                            None => println!("Could not read extenstion on file from front camera directory"),
+                            Some(file_full_path) => {
+                                let file_name = file_full_path.split("/").last().unwrap();
+
+                                let file_name_parts: Vec<&str> = file_name
+                                    .strip_prefix("NO").unwrap()
+                                    .strip_suffix("F.MP4").unwrap()
+                                    .split("-").collect();
+
+                                let date = file_name_parts[0];
+                                let time = file_name_parts[1];
+
+                                let year = date.substring(0,4).parse::<i32>().unwrap();
+                                let month = date.substring(4,6).parse::<u32>().unwrap();
+                                let day = date.substring(6,8).parse::<u32>().unwrap();
+
+                                let hour = time.substring(0,2).parse::<u32>().unwrap();
+                                let minute = time.substring(2, 4).parse::<u32>().unwrap();
+                                let second = time.substring(4, 6).parse::<u32>().unwrap();
+
+                                let datetime: NaiveDateTime = NaiveDate
+                                    ::from_ymd_opt(year, month, day)
+                                    .unwrap()
+                                    .and_hms_opt(hour, minute, second)
+                                    .unwrap();
+
+                                let start_timestamp = datetime.timestamp() + timezonedifference;
+                                
+                                println!("Reading video duration for {}", file_name);
+                                let video_duration = ffprobe::ffprobe(file_full_path)
+                                    .unwrap()
+                                    .streams
+                                    .first()
+                                    .unwrap()
+                                    .duration
+                                    .as_ref()
+                                    .unwrap()
+                                    .parse::<f64>()
+                                    .unwrap();
+
+                                let end_timestamp = start_timestamp + video_duration.floor() as i64;
+
+                                raw_timestamp_posts.push(VideoData{
+                                    start_timestamp: start_timestamp as u32,
+                                    end_timestamp: end_timestamp as u32,
+                                    filename: file_name.to_string()
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    println!("[ OK ]");
+
+    raw_timestamp_posts
+}
+
+fn extract_gps_data_for_video(video_start: u32, video_end: u32, gps_data: &Vec<GPSData>) -> Vec<GPSData>{
+    let mut video_gps_data: Vec<GPSData> = Vec::new();
+    for gps in gps_data {
+        if gps.timestamp > video_end {
+            let pad_time;
+
+            if video_gps_data.is_empty() {
+                pad_time = video_end - video_start;
+            }else{
+                pad_time = video_end - video_gps_data.last().unwrap().timestamp;
+            }
+
+            video_gps_data.push(GPSData{
+                timestamp: pad_time,
+                latitude: 0_f64,
+                longitude: 0_f64,
+                letter: PAD_TOKEN.to_string(),
+                numbers: EMPTY_GPS_NUMBERS
+            });
+
+            break;
+        }else if gps.timestamp > video_start {
+            if video_gps_data.is_empty() {
+                video_gps_data.push(GPSData{
+                    timestamp: gps.timestamp - video_start,
+                    latitude: 0_f64,
+                    longitude: 0_f64,
+                    letter: PAD_TOKEN.to_string(),
+                    numbers: EMPTY_GPS_NUMBERS
+                });
+            }
+            video_gps_data.push(GPSData{
+                timestamp: gps.timestamp,
+                latitude: gps.latitude,
+                longitude: gps.longitude,
+                letter: gps.letter.clone(),
+                numbers: gps.numbers
+            });
+        }
     }
 
-    println!("Waiting for remaining frames to be dumped into files");
-    while ALL_FRAMES_DUMPED.load(Ordering::SeqCst) == false{
-        thread::sleep(Duration::from_millis(1)); 
-    }
+    return video_gps_data;
 }
 
 fn init_canvas<'a>(image_width: u32, image_height: u32)-> Canvas<Surface<'a>>{
@@ -110,144 +252,152 @@ fn init_canvas<'a>(image_width: u32, image_height: u32)-> Canvas<Surface<'a>>{
     return canvas;
 }
 
-fn init_ui(width: u32, height: u32)-> Canvas<Window>{
-    let sdl = sdl2::init().unwrap();
-    let video_subsystem = sdl.video().unwrap();
-    let window = video_subsystem
-        .window("Dash2Map", width, height)
-        .build()
-        .unwrap();
-
-    let mut canvas : Canvas<Window> = window
-        .into_canvas()
-        .present_vsync()
-        .build()
-        .unwrap();
-
-    canvas.set_draw_color(Color::RGB(0, 0, 0));
-    canvas.clear();
-
-    return canvas;
-}
-
 fn find_gps_record(gps_data: &Vec<GPSData>, target_timestamp: u32)-> Option<&GPSData>{
-    let mut i = 0;
+    let mut found_record: Option<&GPSData>;
+    found_record = Option::None;
+    for gps in gps_data {
 
-    if !gps_data.is_empty(){
-        loop{
-            let gps = gps_data.get(i).unwrap();
+        if !gps.letter.eq(PAD_TOKEN){
+            found_record = Option::Some(&gps);
 
-            if gps.timestamp > target_timestamp{
-                let found_record: &GPSData;
-                if i > 0 {
-                    found_record = gps_data.get(i-1).unwrap();
-                }else{
-                    found_record = gps_data.get(0).unwrap();
-                }
-                return Option::Some(found_record);
-            }
-
-            i+=1;
-
-            if i == gps_data.len() {
+            if gps.timestamp > target_timestamp {
                 break;
             }
+        }else {
+            found_record = Option::None;
         }
+
     }
 
-    return Option::None;
+    return found_record;
 }
 
 fn build_animation(
-    canvas: &mut Canvas<Surface>,
-    time_multiplication: f32,
+    video_timestamps: &Vec<VideoData>,
     gps_data: &Vec<GPSData>,
+    time_multiplication: f32,
     fps: u32,
     geoapifykey: &str,
+    canvas: &mut Canvas<Surface>,
     map_cache_dir: &str,
-    output_dir: &str,
-    is_last_trip: bool,
-    window_canvas: &mut Canvas<Window>,
-){
-    let window_canvas_trg = Rect::new(
-        0,
-        0,
-        MAP_WIDTH,
-        MAP_HEIGHT
-    );
+    output_dir: &str
+) {
+    let mut frame_count = 0_usize;
+    let multiplied_frame_time = (1_f64 / f64::from(fps)) * f64::from(time_multiplication);
+    let mut video_index_plus_one = 1_usize;
+    let video_count = video_timestamps.len();
 
-    if !gps_data.is_empty() {
-        let mut frame_count = 0_u32;
-        let star_timestamp = gps_data.get(0).unwrap().timestamp;
-        let multiplied_frame_time = (1_f64 / f64::from(fps)) * f64::from(time_multiplication);
+    for video in video_timestamps{
+        println!(
+            "Building map image sequence for video {} of {} [{}] ({} - {})",
+            video_index_plus_one,
+            video_count,
+            video.filename,
+            video.start_timestamp,
+            video.end_timestamp
+        );
+        video_index_plus_one+=1;
+        let gps_data_for_video = extract_gps_data_for_video(
+            video.start_timestamp,
+            video.end_timestamp,
+            gps_data
+        );
 
-        loop{
-            println!("Frame {}", frame_count);
-            let frame_output_path = format!("{}/{:0>6}.png", output_dir, frame_count);
-            let next_target_delta = f64::from(frame_count) * multiplied_frame_time;
-            let next_target_timestamp = (f64::from(star_timestamp) + next_target_delta).floor();
-            frame_count+=1;
+        if !gps_data_for_video.is_empty(){
+            let mut video_frame_count=0;
 
-            println!("Start Timestamp: {}", star_timestamp);
-            println!("Next target delta {}", next_target_delta);
-            println!("Next target timestamp {}", next_target_timestamp);
-
-            let next_gps_record = find_gps_record(gps_data, next_target_timestamp as u32);
-
-
-            match  next_gps_record{ 
+            match gps_data_for_video.first(){
                 Some(gps_record) => {
-                    println!("Next GPS record timestamp {}", gps_record.timestamp);
-                    build_map_frame(geoapifykey, gps_record, canvas, map_cache_dir);
+                    let pad_frames = (gps_record.timestamp as f64 / multiplied_frame_time).floor() as i32;
+                    println!("Building {} frames for start padding...", pad_frames);
+                    video_frame_count=pad_frames;
 
-                    write_canvas_to_file(
+                    frame_count = build_padding_animation(
+                        pad_frames,
                         canvas,
-                        &frame_output_path,
-                        gps_data.last().unwrap().timestamp == gps_record.timestamp && is_last_trip
-                    );
-
-                    present_canvas_to_window(
-                        window_canvas,
-                        canvas,
-                        window_canvas_trg
+                        frame_count,
+                        output_dir
                     );
                 }
-                None => {
-                    break;
+                None => {}
+            }
+
+            println!("Building map frames...");
+            loop {
+                let frame_output_path = format!("{}/{:0>6}.png", output_dir, frame_count);
+                let next_target_delta = video_frame_count as f64 * multiplied_frame_time;
+                let next_target_timestamp = video.start_timestamp as f64 + next_target_delta;
+                frame_count+=1;
+                video_frame_count+=1;
+
+                let next_gps_record = find_gps_record(&gps_data_for_video, next_target_timestamp as u32);
+
+                match  next_gps_record{ 
+                    Some(gps_record) => {
+                        print!("\rFrame: {} \t Timestamp: {}", frame_count, next_target_timestamp);
+                        build_map_frame(geoapifykey, gps_record, canvas, map_cache_dir);
+                        write_canvas_to_file(canvas, &frame_output_path);
+
+                        if gps_record.timestamp == gps_data_for_video.last().unwrap().timestamp {
+                            break;
+                        }
+                    }
+                    None => {
+                        break;
+                    }
+                }
+            }
+            println!("");
+
+            if gps_data_for_video.len() > 1 {
+                match gps_data_for_video.last(){
+                    Some(gps_record) => {
+                        if gps_record.letter == PAD_TOKEN {
+                            let pad_frames = (gps_record.timestamp as f64 / multiplied_frame_time).floor() as i32;
+                            println!("Building {} frames for end padding...", pad_frames);
+        
+                            frame_count = build_padding_animation(
+                                pad_frames,
+                                canvas,
+                                frame_count,
+                                output_dir
+                            );
+                        }
+                    }
+                    None => {}
                 }
             }
         }
     }
+    println!("[ OK ]");
+}
+
+fn build_padding_animation(
+    pad_frames: i32,
+    canvas: &mut Canvas<Surface>,
+    mut frame_count: usize,
+    output_dir: &str
+)-> usize{
+    for _ in 0..pad_frames {
+        canvas.set_draw_color(Color::RGBA(0, 0, 0, 0));
+        canvas.clear();
+        let frame_output_path = format!("{}/{:0>6}.png", output_dir, frame_count);
+        write_canvas_to_file(canvas, &frame_output_path);
+        frame_count+=1;
+    }
+
+    return frame_count;
 }
 
 fn write_canvas_to_file(
     canvas: &Canvas<Surface>,
-    output_path: &str,
-    is_last_frame: bool
+    output_path: &str
 ){
     let (width, height) = canvas.surface().size();
     let canvas_pixels = canvas.read_pixels(None, PixelFormatEnum::ABGR8888).unwrap();
 
     let path = String::from(output_path);
-    thread::spawn(move || {
-        image::save_buffer(&path, &canvas_pixels, width, height, image::ColorType::Rgba8).unwrap();
-        // println!("Written frame {}", path);
-        if is_last_frame{
-            ALL_FRAMES_DUMPED.store(true, Ordering::SeqCst);
-        }
-    });
-}
-
-fn present_canvas_to_window(
-    canvas_trg: &mut Canvas<Window>,
-    canvas_src: &mut Canvas<Surface>,
-    trg: Rect
-){
-
-    let texture_creator = canvas_trg.texture_creator();
-    let src_texture = texture_creator.create_texture_from_surface(canvas_src.surface()).unwrap();
-    let _ = canvas_trg.copy(&src_texture, None, trg);
-    canvas_trg.present();
+    image::save_buffer(&path, &canvas_pixels, width, height, image::ColorType::Rgba8).unwrap();
 }
 
 fn build_map_frame(
@@ -314,26 +464,17 @@ fn build_map_frame(
 
     canvas.set_draw_color(Color::RGB(255, 0, 0));
     let _ = canvas.fill_rect(Rect::new((half_w-2) as i32, (half_h-2) as i32, 4,4));
-    // canvas.present();
 }
 
-fn extract_gps_data(gps_data_file_path: &str)->Vec<Vec<GPSData>>{
+fn extract_gps_data(gps_data_file_path: &str)->Vec<GPSData>{
     let content = fs::read_to_string(gps_data_file_path).expect("Could not read GPS data file");
     let lines: Split<&str> = content.split("\n");
-    let mut gps_trips: Vec<Vec<GPSData>> = Vec::new();
-    let mut first_line = true;
-    let mut gps_trip_index = 0;
-    gps_trips.push(Vec::new());
+    let mut gps_data: Vec<GPSData> = Vec::new();
 
     for line in lines {
         let parts = line.split(",").collect::<Vec<&str>>();
 
-        if parts.len() == 1 {
-            if !first_line {
-                gps_trip_index+=1;
-                gps_trips.push(Vec::new());
-            }
-        } else if parts.len() > 1{
+        if parts.len() > 1{
             let time = parts[0].parse::<u32>().unwrap();
             let letter = parts[1];
 
@@ -360,13 +501,11 @@ fn extract_gps_data(gps_data_file_path: &str)->Vec<Vec<GPSData>>{
                 numbers: numbers
             };
 
-            gps_trips[gps_trip_index].push(gps_line_data);
+            gps_data.push(gps_line_data);
         }
-
-        first_line = false
     }
 
-    gps_trips
+    gps_data
 }
 
 fn solve_tile(zoom: u16, lat: f64, lon: f64) -> [u16; 4] {
@@ -399,9 +538,6 @@ fn download_or_get(geoapifykey: &str, cache_dir: &str, zoom: u16, tile_x: i16, t
         let tile_url = format!("{}tile/osm-carto/{}/{}/{}.png?apiKey={}", BASE_URL, zoom, tile_x, tile_y, geoapifykey);
         let prefix = tile_path.parent().unwrap();
         std::fs::create_dir_all(prefix).unwrap();
-
-        println!("Downloading tile file {}", tile_url);
-        
         let mut curl = Easy::new();
         curl.url(&tile_url).unwrap();
         let mut tile_file = File::create(&tile_file_path_string).expect("Unable to create tile cache file");

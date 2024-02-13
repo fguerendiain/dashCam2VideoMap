@@ -1,15 +1,7 @@
 #!/bin/sh
 
-# Eventualmente la idea es que este otro sh esté "instalado" como parte del paquete
-VIDEO2TIME_PNG="./video2timedPng"
-DASH_TO_MAP="./dash_to_map/target/debug/dash_to_map"
-SOUNDTRACK_BUILDER="./buildSoundtrack"
-FINAL_TRANSCODER="./pngWavs2Video"
-
-# No termino de entender el tema de los husos horarios en los archivos así que de momento los hardcodeo
-VIDEOFILES_TIMEZONE=-3
-GPSDATA_TIMEZONE=-8
-OUTPUT_TIMEZONE=-3
+# Eventually the idea is that the other scripts and app are "installed" in the system and found on the PATH enviromental variable
+DASH_TO_MAP="./dash2map"
 
 help()
 {
@@ -36,17 +28,21 @@ help()
     echo "      -t FACTOR Time factor multiplier for timelapse (Must be greater than 0 and less or"
     echo "                equal than 1) (defaults to 1, no timelapse)"
     echo
-    echo "      -p WIDTH  Width of the output video file (defaults to 1920)"
-    echo
-    echo "      -y        Unatended mode"
-    echo
     echo "      -m DIR    Map cahce dir (defaults to ~/.cache/dashmap)"
     echo
     echo "      -g APIKEY GeoAPIfy key"
 }
 
-buildOutputFile()
-{
+INPUT_DIR="./"
+TMP_DIR="/tmp/dashcam2VideoMap"
+AUDIO_DIR=""
+OUTPUT_FILE="./out.mkv"
+TIMELAPSE_FACTOR=1
+UNATENDED=false
+DASHMAP_CACHE="${HOME}/.cache/dashmap"
+GEOAPIFY_KEY=""
+
+buildOutputFile(){
     BASE_NAME=${1%.*}
     EXTENSION=${1#$BASE_NAME.}
 
@@ -61,32 +57,39 @@ buildOutputFile()
     fi
 }
 
-INPUT_DIR="./"
-TMP_DIR="/tmp/dashcam2VideoMap"
-AUDIO_DIR=""
-OUTPUT_FILE="./out.mkv"
-TIMELAPSE_FACTOR=1
-UNATENDED=false
-WIDTH=1920
-DASHMAP_CACHE="${HOME}/.cache/dashmap"
-GEOAPIFY_KEY=""
+calculate_audio_length(){
+    soxi -D "$1" 2>/dev/null
+}
 
-processVideo()
-{
-    FILE_NAME=$(basename ${1})
-    BASE_NAME=${FILE_NAME%.*}
-    YEAR=${BASE_NAME:2:4}
-    MONTH=${BASE_NAME:6:2}
-    DAY=${BASE_NAME:8:2}
-    HOUR=${BASE_NAME:11:2}
-    MINUTE=${BASE_NAME:13:2}
-    SECOND=${BASE_NAME:15:2}
-    EPOCH=$(date -d"$YEAR/$MONTH/$DAY $HOUR:$MINUTE:$SECOND" "+%s")
-    OUTPUT_DIR=$TMP_DIR/$2/$BASE_NAME/
-    mkdir -p $OUTPUT_DIR
-    echo "$VIDEO2TIME_PNG -i $FILE -o $OUTPUT_DIR -t $3 -w $WIDTH"
-    $VIDEO2TIME_PNG -i $FILE -o $OUTPUT_DIR -t $3 -w $WIDTH
-    echo $EPOCH > $OUTPUT_DIR/metadata.txt
+generateSoundtrack(){
+    INPUT=$1
+    LENGTH=$2
+    OUTPUT=$3
+    AUDIO_LENGTH=0
+    MUSIC_FILES_COUNT=0
+    ROUNDED_LENGTH=$(echo $LENGTH | sed 's/\.[0-9]*//g')
+
+    TOTAL_LENGTH=0
+    find $INPUT -type f | sort -R | while read FILE; do
+        FILE_AUDIO_LENGTH=$(calculate_audio_length "$FILE")
+        if [ -n "$FILE_AUDIO_LENGTH" ]; then 
+            FILE_AUDIO_ROUNDED_LENGTH=$(echo $FILE_AUDIO_LENGTH | sed 's/\.[0-9]*//g')
+            TOTAL_LENGTH=$((TOTAL_LENGTH+FILE_AUDIO_ROUNDED_LENGTH))
+
+            if [ -n "$FILES" ]; then
+                FILES="$FILES=$FILE"
+            else
+                FILES=$FILE
+            fi
+
+            if [ "$ROUNDED_LENGTH" -lt "$TOTAL_LENGTH" ]; then
+                FILES="$FILES=$OUTPUT"
+                IFS="="
+                sox $FILES
+                break
+            fi
+        fi
+    done
 }
 
 while getopts "hi:w:a:o:t:yp:g:m:" option; do
@@ -111,9 +114,6 @@ while getopts "hi:w:a:o:t:yp:g:m:" option; do
             ;;
         y)
             UNATENDED=true
-            ;;
-        p)
-            WIDTH=$OPTARG
             ;;
         m)
             DASHMAP_CACHE=$OPTARG
@@ -145,57 +145,103 @@ if [ $UNATENDED = false ]; then
 fi
 
 echo "Starting the show!!"
+echo -n "Joining all GPS data files..."
 GPS_FILE=$TMP_DIR/gpsData.txt
 mkdir -p $TMP_DIR
 cat $INPUT_DIR/GPSData*.txt > $GPS_FILE
+echo "[ OK ]"
 
-echo "Processing front camera..."
+echo -n "Building video file lists..."
+echo > $TMP_DIR/front.txt
 for FILE in $INPUT_DIR/Normal/Front/* ; do
-    echo $FILE
-    processVideo $FILE "Front" $TIMELAPSE_FACTOR
+    echo "file $FILE" >> $TMP_DIR/front.txt
 done
 
-echo "Processing back camera..."
-BACK_TIMELAPSE_FACTOR=$(echo "$TIMELAPSE_FACTOR*1.2"|bc)
-for FILE in $INPUT_DIR/Normal/Back/* ; do
-    echo $FILE
-    processVideo $FILE "Back" $BACK_TIMELAPSE_FACTOR
-done
-
-SEQ_OUTPUT=$TMP_DIR/sequence_output/
-mkdir -p $SEQ_OUTPUT
-
-FRAME_OFFSET=0
-for DIR in $TMP_DIR/Front/* ; do
-    FILE_NAME=$(basename $DIR)
-    BASE_NAME=${FILE_NAME%.*}
-    BASE_DIR=${BASE_NAME:0:24}
-    FRONT_NAME=$TMP_DIR/Front/$BASE_DIR"F"
-    BACK_NAME=$TMP_DIR/Back/$BASE_DIR"B"
-
-    echo "Building final image sequence..."
-    echo "$DASH_TO_MAP --frontdir $FRONT_NAME --backdir $BACK_NAME --frameoffset $FRAME_OFFSET --width $WIDTH --outputdir $SEQ_OUTPUT --mapcachedir $DASHMAP_CACHE --originalfps 30 --originaltimefactor $TIMELAPSE_FACTOR --gpsdatafile $GPS_FILE --frontverticaloffset 200 --geoapifykey $GEOAPIFY_KEY"
-    $DASH_TO_MAP --frontdir $FRONT_NAME --backdir $BACK_NAME --frameoffset $FRAME_OFFSET --width $WIDTH --outputdir $SEQ_OUTPUT --mapcachedir $DASHMAP_CACHE --originalfps 30 --originaltimefactor $TIMELAPSE_FACTOR --gpsdatafile $GPS_FILE --frontverticaloffset 200 --geoapifykey $GEOAPIFY_KEY > /dev/null
-    
-    FILE_COUNT=$(ls -1q $FRONT_NAME/* | wc -l)
-    FRAME_OFFSET=$(($FRAME_OFFSET+$FILE_COUNT-1))
-done
-
-if [ -n "$AUDIO_DIR" ]; then
-    VIDEO_DURATION=$(($FRAME_OFFSET/30))
-    SOUNDTRACK=$TMP_DIR/music.wav
-    echo "Generating soundtrack... -- $VIDEO_DURATION"
-    echo "$SOUNDTRACK_BUILDER -i $AUDIO_DIR -l $VIDEO_DURATION -o $SOUNDTRACK"
-    $SOUNDTRACK_BUILDER -i $AUDIO_DIR -l $VIDEO_DURATION -o $SOUNDTRACK > /dev/null
-    echo "Transcoding final video..."
-    echo "$FINAL_TRANSCODER -i $SEQ_OUTPUT -a $SOUNDTRACK -f 1 -x 3 -o $OUTPUT_FILE"
-    $FINAL_TRANSCODER -i $SEQ_OUTPUT -a $SOUNDTRACK -f 1 -x 3 -o $OUTPUT_FILE > /dev/null
-else
-    echo "Transcoding final video..."
-    echo "$FINAL_TRANSCODER -i $SEQ_OUTPUT -f 1 -x 3 -o $OUTPUT_FILE"
-    $FINAL_TRANSCODER -i $SEQ_OUTPUT -f 1 -x 3 -o $OUTPUT_FILE > /dev/null
+BACK_CAMERA_PRESENT=0
+if [ "$(ls -A $INPUT_DIR/Normal/Back/)" ]; then
+    BACK_CAMERA_PRESENT=1
+    echo > $TMP_DIR/back.txt
+    for FILE in $INPUT_DIR/Normal/Back/* ; do
+        echo "file $FILE" >> $TMP_DIR/back.txt
+    done
 fi
 
-# rm $TMP_DIR -R
+echo "[ OK ]"
+
+mkdir -p $TMP_DIR/mapImgSeq
+MAP_BUILD_CMD="$DASH_TO_MAP --frontvideo $INPUT_DIR/Normal/Front --outputdir $TMP_DIR/mapImgSeq --fps 30 --originaltimefactor $TIMELAPSE_FACTOR --gpsdatafile $GPS_FILE --geoapifykey $GEOAPIFY_KEY --mapcachedir $DASHMAP_CACHE"
+
+#$MAP_BUILD_CMD
+
+echo "Calculating total video duration..."
+TOTAL_DURATION=`for FILE in $INPUT_DIR/Normal/Front/*
+do ffprobe -v quiet -of csv=p=0 -show_entries format=duration "$FILE"
+done | awk '{sum += $1}; END{print sum}'`
+
+TOTAL_DURATION=$(echo "$TOTAL_DURATION*$TIMELAPSE_FACTOR"|bc)
+
+echo "Building soundtrack..."
+generateSoundtrack $AUDIO_DIR $TOTAL_DURATION $TMP_DIR/music.mp3
+
+echo "Building final video..."
+
+# Front camera input
+FFMPEG_INPUT_FRONT="-f concat -safe 0 -i $TMP_DIR/front.txt"
+
+# Map input
+FFMPEG_INPUT_MAP="-r 30 -pattern_type glob -i '$TMP_DIR/mapImgSeq/*.png'"
+
+# Back camera input if available
+if [ $BACK_CAMERA_PRESENT == 1 ]; then
+    FFMPEG_INPUT_BACK="-f concat -safe 0 -i $TMP_DIR/back.txt"
+fi
+
+# Music input
+FFMPEG_MUSIC_INPUT="-i $TMP_DIR/music.mp3"
+
+# Front camera timelapse
+FFMPEG_FILTER="[0:v]setpts=expr=$TIMELAPSE_FACTOR*PTS[timelapsedfront];"
+
+# Back camera timelapse if available
+if [ $BACK_CAMERA_PRESENT == 1 ]; then
+    FFMPEG_INPUT_BACK="-f concat -safe 0 -i $TMP_DIR/back.txt"
+    FFMPEG_FILTER="$FFMPEG_FILTER[2:v]setpts=expr=$TIMELAPSE_FACTOR*PTS[timelapsedback];"
+fi
+
+# Front camera crop and scale
+FFMPEG_FILTER="$FFMPEG_FILTER[timelapsedfront]scale=w=1920:h=-1,crop=w=1920:h=1080:x=0:y=240"
+
+# Back camera crop, scale and overlay if present
+if [ $BACK_CAMERA_PRESENT == 1 ]; then
+    FFMPEG_FILTER="$FFMPEG_FILTER[cleanfront];"
+    FFMPEG_FILTER="$FFMPEG_FILTER[timelapsedback]scale=w=640:h=-1,crop=w=640:h=240:x=0:y=50[cleanback];"
+    FFMPEG_FILTER="$FFMPEG_FILTER[cleanfront][cleanback]overlay=x=640:y=100[bothcameras];"
+else
+    FFMPEG_FILTER="$FFMPEG_FILTER[bothcameras];"
+fi
+
+# Map overlay
+FFMPEG_FILTER="$FFMPEG_FILTER[bothcameras][1:v]overlay=x=1644:y=804[bothcameraswithmap];"
+
+if [ $BACK_CAMERA_PRESENT == 1 ]; then
+    AUDIO_INPUT_NAME="3"
+else
+    AUDIO_INPUT_NAME="2"
+fi
+
+FADE_OUT_START=`echo $TOTAL_DURATION - 1 | bc`
+
+# Fade in/out
+FFMPEG_FILTER="$FFMPEG_FILTER[bothcameraswithmap]fade=d=1,fade=out:$FADE_OUT_START:d=1[finalrender_v];"
+
+# Audio Fade in/out
+FFMPEG_FILTER="$FFMPEG_FILTER[$AUDIO_INPUT_NAME]afade=d=1,afade=out:$FADE_OUT_START:d=1[finalrender_a];"
+
+# Compression
+FFMPEG_FORMAT="-c:v libx265 -preset slow -c:a aac -b:a 128k"
+
+FFMPEG_CMD="ffmpeg $FFMPEG_INPUT_FRONT $FFMPEG_INPUT_MAP $FFMPEG_INPUT_BACK $FFMPEG_MUSIC_INPUT -filter_complex \"$FFMPEG_FILTER\" -map \"[finalrender_a]\" -map \"[finalrender_v]\" -shortest $FFMPEG_FORMAT $OUTPUT_FILE"
+
+echo $FFMPEG_CMD
 
 echo "Ding!! -- All done"
